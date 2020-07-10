@@ -7,27 +7,48 @@
 
 #include <cstdint>
 
+#include <array>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 
-struct DirEntry
+
+/* pixel format: xxBBGGRR, xx=unused */
+typedef std::array<uint32_t, 256> Palette;
+
+
+
+/* 64x64 indexed color */
+typedef std::array<uint8_t, 4096> Flat;
+
+
+
+/* see [4-10] */
+typedef char *Reject;
+
+
+
+struct PatchDescriptor
 {
-    uint32_t offset;
-    uint32_t size;
-    char name[9];
+    uint16_t x, y;
+    uint16_t pname_index;
 };
 
-struct WAD
+struct TextureDefinition
 {
-    bool iwad;
-    std::vector<DirEntry> directory;
+    char name[9];
+    uint16_t width, height;
+    std::vector<PatchDescriptor> patchdescs;
+};
 
-    /* get the lump's index in the WAD's directory */
-    size_t lumpidx(char const *name, size_t start=0) const;
 
-    /* get the lump itself */
-    DirEntry const &findlump(char const *name, size_t start=0) const;
+
+struct Texture
+{
+    size_t width, height;
+    std::vector<uint8_t> data;
+    std::vector<bool> opaque;
 };
 
 
@@ -87,13 +108,32 @@ struct Vertex
 
 
 
+struct Sector
+{
+    /* floor/ceiling heights */
+    uint16_t floor, ceiling;
+    Flat *floor_flat, *ceiling_flat;
+    /* 00=black, FF=white
+     * (this number is divided by 8 ie. 0 through 7 are the
+     * same, 8 through 15 are the same, etc.) */
+    uint16_t lightlevel;
+    /* see [4-9-1] */
+    uint16_t special;
+    /* see LINEDEF */
+    uint16_t tag;
+};
+
+
+
 struct Sidedef
 {
+    /* how many pixels horizontal/vertically
+     * to move before pasting the texture */
     int16_t x, y;
     /* the upper, lower, and middle texture names */
-    char upper[8], lower[8], middle[8];
+    Texture *upper, *lower, *middle;
     /* SECTOR index of the SECTOR this SIDEDEF helps surround */
-    uint16_t sector;
+    Sector *sector;
 };
 
 
@@ -142,11 +182,11 @@ enum LinedefFlags
 
 struct Seg
 {
-    uint16_t start_vertex, end_vertex;
+    Vertex *start, *end;
     /* 0000=east, 4000=north, 8000=west, C000=south
      * see [4-6] for more details */
     uint16_t angle;
-    uint16_t seg;
+    Linedef *linedef;
     /* 0 if the SEG goes the same, or 1 if in the
      * opposite direction of the attached LINEDEF */
     uint16_t direction;
@@ -162,8 +202,8 @@ struct Seg
 /* see [4-7] */
 struct SSector
 {
-    uint16_t seg_count;
-    uint16_t start_seg;
+    uint16_t count;
+    uint16_t start;
 };
 
 
@@ -173,36 +213,14 @@ struct Node
 {
     int16_t x, y;
     int16_t dx, dy;
-    int16_t y_upper_bound_right, y_lower_bound_right;
-    int16_t x_lower_bound_right, x_upper_bound_right;
-    int16_t y_upper_bound_left, y_lower_bound_left;
-    int16_t x_lower_bound_left, x_upper_bound_left;
+    int16_t right_upper_y, right_lower_y;
+    int16_t right_lower_x, right_upper_x;
+    int16_t left_upper_y, left_lower_y;
+    int16_t left_lower_x, left_upper_x;
     /* if bit 15 is set, the rest of the number
      * is an SSECTOR, otherwise it's a NODE */
-    uint16_t right_node_or_ssector, left_node_or_ssector;
+    uint16_t right, left;
 };
-
-
-
-struct Sector
-{
-    /* floor/ceiling heights */
-    uint16_t floor, ceiling;
-    char floor_flat[8], ceiling_flat[8];
-    /* 00=black, FF=white
-     * (this number is divided by 8 ie. 0 through 7 are the
-     * same, 8 through 15 are the same, etc.) */
-    uint16_t lightlevel;
-    /* see [4-9-1] */
-    uint16_t special;
-    /* see LINEDEF */
-    uint16_t tag;
-};
-
-
-
-/* see [4-10] */
-typedef char *Reject;
 
 
 
@@ -230,22 +248,6 @@ struct BlockMapEntry
 
 
 
-struct Level
-{
-    std::vector<Thing> things;
-    /* linedefs
-     * sidedefs
-     * vertexes
-     * segs
-     * ssectors
-     * nodes
-     * sectors
-     * reject
-     * blockmap */
-};
-
-
-
 /* see [5-1] */
 struct Picture
 {
@@ -265,32 +267,45 @@ struct Picture
 
 
 
-typedef uint8_t Flat[4096];
-
-
-
-typedef uint32_t Palette[256];
-
-
-
-struct PatchDescriptor
+struct Level
 {
-    uint16_t x, y;
-    uint16_t pname_index;
+    std::unordered_map<std::string, Flat> flats;
+
+    std::vector<Thing> things;
+    std::vector<Linedef> linedefs;
+    std::vector<Sidedef> sidedefs;
+    std::vector<Vertex> vertices;
+    std::vector<Seg> segs;
+    std::vector<SSector> ssectors;
+    std::vector<Node> nodes;
+    std::vector<Sector> sectors;
+    Reject reject;
+    BlockMap blockmap;
 };
 
-struct TextureDefinition
+
+
+struct DirEntry
 {
+    uint32_t offset;
+    uint32_t size;
     char name[9];
-    uint16_t width, height;
-    std::vector<PatchDescriptor> patchdescs;
 };
 
-struct Texture
+struct WAD
 {
-    size_t width, height;
-    std::vector<uint8_t> data;
-    std::vector<bool> opaque;
+    bool iwad;
+    std::vector<DirEntry> directory;
+
+    std::vector<size_t> pnames;
+    Palette palette;
+    std::unordered_map<std::string, Texture> textures;
+
+    /* get the lump's index in the WAD's directory */
+    size_t lumpidx(char const *name, size_t start=0) const;
+
+    /* get the lump itself */
+    DirEntry const &findlump(char const *name, size_t start=0) const;
 };
 
 

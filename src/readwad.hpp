@@ -14,7 +14,7 @@
 WAD readwad(FILE *wad);
 
 /* read an 'ExMy' lump */
-Level readlevel(FILE *f, WAD const &wad);
+Level readlevel(char const *level, FILE *f, WAD &wad);
 
 /* read a 'TEXTUREx' lump */
 std::vector<TextureDefinition> readtexturedefs(
@@ -22,11 +22,16 @@ std::vector<TextureDefinition> readtexturedefs(
     WAD const &wad,
     char const lumpname[9]);
 
+/* load a picture */
+Picture loadpicture(
+    FILE *f,
+    WAD const &wad,
+    PatchDescriptor const &pd);
+
 /* flatten patches into a single texture */
 Texture buildtexture(
     FILE *f,
     WAD const &wad,
-    std::vector<size_t> const &pnames,
     TextureDefinition const &td);
 
 

@@ -13,20 +13,20 @@
 
 
 /* FIXME: TEMP */
-#define wad_DO_PATCH_PGMS
-#define wad_DO_TEXTURE_PGMS
+//#define wad_DO_PATCH_PGMS
+//#define wad_DO_TEXTURE_PGMS
 
 
 
-WAD readwad(FILE *wad)
+WAD readwad(FILE *f)
 {
-    WAD out{};
+    WAD wad{};
 
-    char id[5] = {0,0,0,0,0};
-    fread(id, 1, 4, wad);
+    char id[5] = {0};
+    fread(id, 1, 4, f);
 
-    out.iwad = !strcmp(id, "IWAD");
-    if (!out.iwad && strcmp(id, "PWAD") != 0)
+    wad.iwad = !strcmp(id, "IWAD");
+    if (!wad.iwad && strcmp(id, "PWAD") != 0)
     {
         throw std::runtime_error(
             "WAD id string must be 'IWAD' or 'PWAD'! (got '"
@@ -39,30 +39,22 @@ WAD readwad(FILE *wad)
     uint32_t lump_count = 0,
              directory_pointer = 0;
 
-    fread(&lump_count, 4, 1, wad);
-    fread(&directory_pointer, 4, 1, wad);
+    fread(&lump_count, 4, 1, f);
+    fread(&directory_pointer, 4, 1, f);
 
-    fseek(wad, directory_pointer, SEEK_SET);
+    fseek(f, directory_pointer, SEEK_SET);
     for (uint32_t i = 0; i < lump_count; ++i)
     {
         DirEntry entry{};
-
-        fread(&entry.offset, 4, 1, wad);
-        fread(&entry.size, 4, 1, wad);
-
-        fread(&entry.name, 8, 1, wad);
         entry.name[8] = '\0';
 
-        out.directory.push_back(entry);
+        fread(&entry.offset, 4, 1, f);
+        fread(&entry.size, 4, 1, f);
+        fread(&entry.name, 8, 1, f);
+
+        wad.directory.push_back(entry);
     }
 
-    return out;
-}
-
-
-
-Level readlevel(FILE *f, WAD const &wad)
-{
     /* load PNAMES */
     auto dir = wad.findlump("PNAMES");
     fseek(f, dir.offset, SEEK_SET);
@@ -70,13 +62,11 @@ Level readlevel(FILE *f, WAD const &wad)
     uint32_t count = 0;
     fread(&count, 4, 1, f);
 
-    std::vector<size_t> pnames{};
     for (size_t i = 0; i < count; ++i)
     {
-        char name[9];
-        name[8] = '\0';
+        char name[9] = {0};
         fread(name, 8, 1, f);
-        pnames.push_back(wad.lumpidx(name));
+        wad.pnames.push_back(wad.lumpidx(name));
     }
 
 
@@ -91,13 +81,12 @@ Level readlevel(FILE *f, WAD const &wad)
     /* load the palette */
     dir = wad.findlump("PLAYPAL");
     fseek(f, dir.offset, SEEK_SET);
-    Palette palette{};
 
     uint8_t pal8[256][3];
     fread(pal8, 3, 256, f);
     for (size_t i = 0; i < 256; ++i)
     {
-        palette[i] =\
+        wad.palette[i] =\
             pal8[i][0]
             | (pal8[i][1] <<  8)
             | (pal8[i][2] << 16)
@@ -106,18 +95,23 @@ Level readlevel(FILE *f, WAD const &wad)
 
 
     /* build the textures */
-    std::vector<Texture> textures{};
     for (auto &td : tds)
     {
-        textures.push_back(buildtexture(f, wad, pnames, td));
+        wad.textures[std::string(td.name)] =\
+            buildtexture(f, wad, td);
     }
+    return wad;
+}
 
 
+
+Level readlevel(char const *level, FILE *f, WAD &wad)
+{
     Level out{};
-    auto lvlidx = wad.lumpidx("E1M1");
+    auto const lvlidx = wad.lumpidx(level);
 
     /* read THINGS */
-    dir = wad.findlump("THINGS", lvlidx);
+    auto dir = wad.findlump("THINGS", lvlidx);
     fseek(f, dir.offset, SEEK_SET);
 
     for (size_t i = 0; i < dir.size / 10; ++i)
@@ -134,9 +128,84 @@ Level readlevel(FILE *f, WAD const &wad)
     }
 
 
-    /* TODO: vertices, sidedefs */
-    std::vector<Vertex> vertices;
-    std::vector<Sidedef> sidedefs;
+    /* read VERTEXES */
+    dir = wad.findlump("VERTEXES", lvlidx);
+    fseek(f, dir.offset, SEEK_SET);
+    for (size_t i = 0; i < dir.size / 4; ++i)
+    {
+        Vertex vertex{};
+        fread(&vertex.x, 2, 1, f);
+        fread(&vertex.y, 2, 1, f);
+        out.vertices.push_back(vertex);
+    }
+
+
+    /* read flats */
+    size_t begin = wad.lumpidx("F_START", lvlidx),
+           end = wad.lumpidx("F_END", lvlidx);
+    fseek(f, wad.directory[begin].offset, SEEK_SET);
+    for (size_t i = begin; i < end; i++)
+    {
+        std::string name = wad.directory[i].name;
+        fread(out.flats[name].data(), 1, 4096, f);
+    }
+
+
+    /* read SECTORS */
+    dir = wad.findlump("SECTORS", lvlidx);
+    fseek(f, dir.offset, SEEK_SET);
+    for (size_t i = 0; i < dir.size / 26; ++i)
+    {
+        Sector sec{};
+        char floorname[9] = {0},
+             ceilingname[9] = {0};
+        floorname[8] = ceilingname[8] = '\0';
+
+        fread(&sec.floor, 2, 1, f);
+        fread(&sec.ceiling, 2, 1, f);
+
+        sec.floor_flat = &out.flats[floorname];
+        sec.ceiling_flat = &out.flats[ceilingname];
+
+        fread(&sec.lightlevel, 2, 1, f);
+        fread(&sec.special, 2, 1, f);
+        fread(&sec.tag, 2, 1, f);
+
+        out.sectors.push_back(sec);
+    }
+
+
+    /* read SIDEDEFS */
+    dir = wad.findlump("SIDEDEFS", lvlidx);
+    fseek(f, dir.offset, SEEK_SET);
+
+    for (size_t i = 0; i < dir.size / 30; ++i)
+    {
+        Sidedef sd{};
+        uint16_t sector_idx = 0;
+        char up[9] = {0},
+             low[9] = {0},
+             mid[9] = {0};
+
+        fread(&sd.x, 2, 1, f);
+        fread(&sd.y, 2, 1, f);
+        fread(&up, 1, 8, f);
+        fread(&low, 1, 8, f);
+        fread(&mid, 1, 8, f);
+        fread(&sector_idx, 2, 1, f);
+
+        std::string upper{up},
+                    lower{low},
+                    middle{mid};
+
+        sd.upper = (upper == "-"? nullptr : &wad.textures[upper]);
+        sd.lower = (lower == "-"? nullptr : &wad.textures[lower]);
+        sd.middle = (middle == "-"? nullptr : &wad.textures[middle]);
+
+        sd.sector = &out.sectors[sector_idx];
+
+        out.sidedefs.push_back(sd);
+    }
 
 
     /* read LINEDEFS */
@@ -149,23 +218,94 @@ Level readlevel(FILE *f, WAD const &wad)
 
         uint16_t idx = 0;
         fread(&idx, 2, 1, f);
-        ld.start = &vertices[idx];
+        ld.start = &out.vertices[idx];
 
         fread(&idx, 2, 1, f);
-        ld.end = &vertices[idx];
+        ld.end = &out.vertices[idx];
 
         fread(&ld.flags, 2, 1, f);
         fread(&ld.types, 2, 1, f);
         fread(&ld.tag, 2, 1, f);
 
         fread(&idx, 2, 1, f);
-        ld.right = &sidedefs[idx];
+        ld.right = &out.sidedefs[idx];
 
         fread(&idx, 2, 1, f);
-        ld.left = (idx != 0xFFFF? &sidedefs[idx] : nullptr);
+        ld.left = (idx != 0xFFFF? &out.sidedefs[idx] : nullptr);
 
-        /* TODO: do something with this */
+        out.linedefs.push_back(ld);
     }
+
+
+    /* read SEGS */
+    dir = wad.findlump("SEGS", lvlidx);
+    fseek(f, dir.offset, SEEK_SET);
+
+    for (size_t i = 0; i < dir.size / 12; ++i)
+    {
+        Seg seg{};
+
+        uint16_t startvert = 0,
+                 endvert = 0,
+                 linedef = 0;
+
+        fread(&startvert, 2, 1, f);
+        fread(&endvert, 2, 1, f);
+        fread(&seg.angle, 2, 1, f);
+        fread(&linedef, 2, 1, f);
+        fread(&seg.direction, 2, 1, f);
+        fread(&seg.offset, 2, 1, f);
+
+        seg.start = &out.vertices[startvert];
+        seg.end = &out.vertices[endvert];
+        seg.linedef = &out.linedefs[linedef];
+
+        out.segs.push_back(seg);
+    }
+
+
+    /* read SSECTORS */
+    dir = wad.findlump("SSECTORS", lvlidx);
+    fseek(f, dir.offset, SEEK_SET);
+
+    for (size_t i = 0; i < dir.size / 4; ++i)
+    {
+        SSector ssector{};
+        fread(&ssector.count, 2, 1, f);
+        fread(&ssector.start, 2, 1, f);
+        out.ssectors.push_back(ssector);
+    }
+
+
+    /* read NODES */
+    dir = wad.findlump("NODES", lvlidx);
+    fseek(f, dir.offset, SEEK_SET);
+
+    for (size_t i = 0; i < dir.size / 28; ++i)
+    {
+        Node node{};
+
+        fread(&node.x, 2, 1, f);
+        fread(&node.y, 2, 1, f);
+        fread(&node.dx, 2, 1, f);
+        fread(&node.dy, 2, 1, f);
+
+        fread(&node.right_upper_y, 2, 1, f);
+        fread(&node.right_lower_y, 2, 1, f);
+        fread(&node.right_lower_x, 2, 1, f);
+        fread(&node.right_upper_x, 2, 1, f);
+
+        fread(&node.left_upper_y, 2, 1, f);
+        fread(&node.left_lower_y, 2, 1, f);
+        fread(&node.left_lower_x, 2, 1, f);
+        fread(&node.left_upper_x, 2, 1, f);
+
+        fread(&node.right, 2, 1, f);
+        fread(&node.left, 2, 1, f);
+
+        out.nodes.push_back(node);
+    }
+
 
     return out;
 }
@@ -205,11 +345,13 @@ std::vector<TextureDefinition> readtexturedefs(
         fseek(f, 4L, SEEK_CUR);
         fread(&patchdef_count, 2, 1, f);
 
+#ifdef wad_DO_PATCH_PGMS
         printf("%s:%dx%d,%d patches\n",
             td.name,
             td.width,
             td.height,
             patchdef_count);
+#endif
 
         for (size_t j = 0; j < patchdef_count; ++j)
         {
@@ -232,10 +374,9 @@ std::vector<TextureDefinition> readtexturedefs(
 Picture loadpicture(
     FILE *f,
     WAD const &wad,
-    std::vector<size_t> const &pnames,
     PatchDescriptor const &pd)
 {
-    auto patch = wad.directory[pnames[pd.pname_index]];
+    auto patch = wad.directory[wad.pnames[pd.pname_index]];
     fseek(f, patch.offset, SEEK_SET);
 
     Picture pic{};
@@ -312,10 +453,11 @@ Picture loadpicture(
 Texture buildtexture(
     FILE *f,
     WAD const &wad,
-    std::vector<size_t> const &pnames,
     TextureDefinition const &td)
 {
+#ifdef wad_DO_TEXTURE_PGMS
     printf("build %s\n", td.name);
+#endif
 
     Texture tex{};
     tex.width = td.width;
@@ -325,7 +467,7 @@ Texture buildtexture(
 
     for (auto &pd : td.patchdescs)
     {
-        auto pic = loadpicture(f, wad, pnames, pd);
+        auto pic = loadpicture(f, wad, pd);
 
         for (size_t y = 0; y < pic.height; ++y)
         {
@@ -368,3 +510,4 @@ Texture buildtexture(
 
     return tex;
 }
+
