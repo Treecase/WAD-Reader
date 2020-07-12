@@ -2,7 +2,7 @@
 # See LICENSE file for copyright and license details.
 
 CXXFLAGS=-Wall -Wextra -g
-LDFLAGS=-lSDL2
+LDFLAGS=-lSDL2 -lGL -lGLU -lGLEW
 
 
 SRCDIR=src

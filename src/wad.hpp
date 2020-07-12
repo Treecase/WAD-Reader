@@ -111,8 +111,8 @@ struct Vertex
 struct Sector
 {
     /* floor/ceiling heights */
-    uint16_t floor, ceiling;
-    Flat *floor_flat, *ceiling_flat;
+    int16_t floor, ceiling;
+    std::string floor_flat, ceiling_flat;
     /* 00=black, FF=white
      * (this number is divided by 8 ie. 0 through 7 are the
      * same, 8 through 15 are the same, etc.) */
@@ -131,7 +131,7 @@ struct Sidedef
      * to move before pasting the texture */
     int16_t x, y;
     /* the upper, lower, and middle texture names */
-    Texture *upper, *lower, *middle;
+    std::string upper, lower, middle;
     /* SECTOR index of the SECTOR this SIDEDEF helps surround */
     Sector *sector;
 };
@@ -186,7 +186,7 @@ struct Seg
     /* 0000=east, 4000=north, 8000=west, C000=south
      * see [4-6] for more details */
     uint16_t angle;
-    Linedef *linedef;
+    uint16_t linedef;
     /* 0 if the SEG goes the same, or 1 if in the
      * opposite direction of the attached LINEDEF */
     uint16_t direction;
@@ -269,6 +269,8 @@ struct Picture
 
 struct Level
 {
+    class WAD const *wad;
+
     std::unordered_map<std::string, Flat> flats;
 
     std::vector<Thing> things;
@@ -292,14 +294,16 @@ struct DirEntry
     char name[9];
 };
 
-struct WAD
+class WAD
 {
+public:
     bool iwad;
     std::vector<DirEntry> directory;
 
     std::vector<size_t> pnames;
     Palette palette;
     std::unordered_map<std::string, Texture> textures;
+    std::unordered_map<std::string, Flat> flats;
 
     /* get the lump's index in the WAD's directory */
     size_t lumpidx(char const *name, size_t start=0) const;

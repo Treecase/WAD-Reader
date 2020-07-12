@@ -70,14 +70,6 @@ WAD readwad(FILE *f)
     }
 
 
-    /* load texture definitions */
-    auto tds = readtexturedefs(f, wad, "TEXTURE1");
-    for (auto &td : readtexturedefs(f, wad, "TEXTURE2"))
-    {
-        tds.push_back(td);
-    }
-
-
     /* load the palette */
     dir = wad.findlump("PLAYPAL");
     fseek(f, dir.offset, SEEK_SET);
@@ -94,12 +86,34 @@ WAD readwad(FILE *f)
     }
 
 
-    /* build the textures */
+    /* load textures */
+    auto tds = readtexturedefs(f, wad, "TEXTURE1");
+    for (auto &td : readtexturedefs(f, wad, "TEXTURE2"))
+    {
+        tds.push_back(td);
+    }
+
     for (auto &td : tds)
     {
         wad.textures[std::string(td.name)] =\
             buildtexture(f, wad, td);
     }
+
+
+    /* load the flats */
+    size_t f_start = wad.lumpidx("F_START"),
+           f_end = wad.lumpidx("F_END");
+    for (size_t i = f_start + 1; i < f_end; ++i)
+    {
+        auto &lump = wad.directory[i];
+        fseek(f, lump.offset, SEEK_SET);
+
+        wad.flats[wad.directory[i].name] = Flat{};
+        fread(wad.flats[wad.directory[i].name].data(), 1, 4096, f);
+    }
+
+
+
     return wad;
 }
 
@@ -108,6 +122,7 @@ WAD readwad(FILE *f)
 Level readlevel(char const *level, FILE *f, WAD &wad)
 {
     Level out{};
+    out.wad = &wad;
     auto const lvlidx = wad.lumpidx(level);
 
     /* read THINGS */
@@ -157,19 +172,22 @@ Level readlevel(char const *level, FILE *f, WAD &wad)
     for (size_t i = 0; i < dir.size / 26; ++i)
     {
         Sector sec{};
-        char floorname[9] = {0},
-             ceilingname[9] = {0};
+        char floorname[9],
+             ceilingname[9];
         floorname[8] = ceilingname[8] = '\0';
 
         fread(&sec.floor, 2, 1, f);
         fread(&sec.ceiling, 2, 1, f);
 
-        sec.floor_flat = &out.flats[floorname];
-        sec.ceiling_flat = &out.flats[ceilingname];
+        fread(&floorname, 1, 8, f);
+        fread(&ceilingname, 1, 8, f);
 
         fread(&sec.lightlevel, 2, 1, f);
         fread(&sec.special, 2, 1, f);
         fread(&sec.tag, 2, 1, f);
+
+        sec.floor_flat = floorname;
+        sec.ceiling_flat = ceilingname;
 
         out.sectors.push_back(sec);
     }
@@ -194,13 +212,9 @@ Level readlevel(char const *level, FILE *f, WAD &wad)
         fread(&mid, 1, 8, f);
         fread(&sector_idx, 2, 1, f);
 
-        std::string upper{up},
-                    lower{low},
-                    middle{mid};
-
-        sd.upper = (upper == "-"? nullptr : &wad.textures[upper]);
-        sd.lower = (lower == "-"? nullptr : &wad.textures[lower]);
-        sd.middle = (middle == "-"? nullptr : &wad.textures[middle]);
+        sd.upper = std::string{up},
+        sd.lower = std::string{low},
+        sd.middle = std::string{mid};
 
         sd.sector = &out.sectors[sector_idx];
 
@@ -252,13 +266,12 @@ Level readlevel(char const *level, FILE *f, WAD &wad)
         fread(&startvert, 2, 1, f);
         fread(&endvert, 2, 1, f);
         fread(&seg.angle, 2, 1, f);
-        fread(&linedef, 2, 1, f);
+        fread(&seg.linedef, 2, 1, f);
         fread(&seg.direction, 2, 1, f);
         fread(&seg.offset, 2, 1, f);
 
         seg.start = &out.vertices[startvert];
         seg.end = &out.vertices[endvert];
-        seg.linedef = &out.linedefs[linedef];
 
         out.segs.push_back(seg);
     }
@@ -320,6 +333,7 @@ std::vector<TextureDefinition> readtexturedefs(
     auto dir = wad.findlump(lumpname);
     fseek(f, dir.offset, SEEK_SET);
 
+    /* number of texturedefs in the lump */
     uint32_t count = 0;
     fread(&count, 4, 1, f);
 
@@ -328,16 +342,17 @@ std::vector<TextureDefinition> readtexturedefs(
     {
         TextureDefinition td{};
 
-        fseek(f, dir.offset + 4 + (i * 4), SEEK_SET);
-
+        /* get the pointer to the actual texturedef */
         uint32_t ptr = 0;
+        fseek(f, dir.offset + 4 + (i * 4), SEEK_SET);
         fread(&ptr, 4, 1, f);
 
+        /* read the texturedef data */
         fseek(f, dir.offset + ptr, SEEK_SET);
 
-        td.name[8] = '\0';
         uint16_t patchdef_count = 0;
 
+        td.name[8] = '\0';
         fread(td.name, 8, 1, f);
         fseek(f, 4L, SEEK_CUR);
         fread(&td.width, 2, 1, f);
@@ -353,6 +368,7 @@ std::vector<TextureDefinition> readtexturedefs(
             patchdef_count);
 #endif
 
+        /* read all the texturedef's patchdefs */
         for (size_t j = 0; j < patchdef_count; ++j)
         {
             PatchDescriptor pd{};
