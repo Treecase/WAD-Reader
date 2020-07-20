@@ -119,11 +119,11 @@ WAD readwad(FILE *f)
 
 
 
-Level readlevel(char const *level, FILE *f, WAD &wad)
+Level readlevel(std::string level, FILE *f, WAD &wad)
 {
     Level out{};
     out.wad = &wad;
-    auto const lvlidx = wad.lumpidx(level);
+    auto const lvlidx = wad.lumpidx(level.c_str());
 
     /* read THINGS */
     auto dir = wad.findlump("THINGS", lvlidx);
@@ -260,8 +260,7 @@ Level readlevel(char const *level, FILE *f, WAD &wad)
         Seg seg{};
 
         uint16_t startvert = 0,
-                 endvert = 0,
-                 linedef = 0;
+                 endvert = 0;
 
         fread(&startvert, 2, 1, f);
         fread(&endvert, 2, 1, f);

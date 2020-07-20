@@ -14,7 +14,7 @@
 WAD readwad(FILE *wad);
 
 /* read an 'ExMy' lump */
-Level readlevel(char const *level, FILE *f, WAD &wad);
+Level readlevel(std::string level, FILE *f, WAD &wad);
 
 /* read a 'TEXTUREx' lump */
 std::vector<TextureDefinition> readtexturedefs(

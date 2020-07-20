@@ -7,10 +7,19 @@ in vec2 texCoord;
 out vec4 FragColor;
 
 uniform sampler2D tex;
+uniform int xoffset;
+uniform int yoffset;
 
 
 void main()
 {
-    FragColor = texture(tex, texCoord);
+    vec4 color = texture(
+        tex,
+        vec2(texCoord.x + xoffset, texCoord.y + yoffset));
+    if (color.a != 1.0)
+    {
+        discard;
+    }
+    FragColor = color;
 }
 
