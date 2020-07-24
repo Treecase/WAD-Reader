@@ -16,8 +16,7 @@ private:
     glm::vec3 _forward;
 
 public:
-    glm::vec3 pos;
-    glm::vec3 up;
+    glm::vec3 pos, up;
 
     /* move the camera relative to its forward/up vectors:
      * ie. if vector.x > 0, move right; if < 0, move left */

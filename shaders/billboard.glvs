@@ -1,0 +1,27 @@
+
+#version 330 core
+
+
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec2 aTexCoord;
+
+out vec2 texCoord;
+
+uniform mat4 model;
+uniform mat4 camera;
+uniform mat4 projection;
+
+
+void main()
+{
+    texCoord = aTexCoord;
+    mat4 billboard = camera * model;
+    billboard[0][0] = 1;
+    billboard[0][1] = 0;
+    billboard[0][2] = 0;
+    billboard[2][0] = 0;
+    billboard[2][1] = 0;
+    billboard[2][2] = 1;
+    gl_Position = projection * billboard * vec4(aPos, 1);
+}
+

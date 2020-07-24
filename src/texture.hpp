@@ -37,8 +37,10 @@ public:
     GLuint id(void) const;
 
 
-    /* NOTE: the required format is 8-bit RGBA */
-    GLTexture(size_t width, size_t height, void *data);
+    /* NOTE: the required format is 'color, alpha, unused, unused',
+     * each being 8-bits unsigned
+     * (note that the shader only considers alpha as on or off) */
+    GLTexture(size_t width, size_t height, void const *data);
     ~GLTexture();
 };
 

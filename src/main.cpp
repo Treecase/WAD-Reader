@@ -7,6 +7,7 @@
 #include "program.hpp"
 #include "readwad.hpp"
 #include "texture.hpp"
+#include "things.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -30,6 +31,23 @@
 #include <vector>
 
 
+
+struct RenderThing
+{
+    GLTexture *sprite;
+    std::unique_ptr<Mesh> mesh;
+    glm::vec3 pos;
+
+    RenderThing(
+        GLTexture *sprite,
+        Mesh *mesh,
+        glm::vec3 pos)
+    :   sprite{sprite},
+        mesh{mesh},
+        pos{pos}
+    {
+    }
+};
 
 struct Wall
 {
@@ -92,7 +110,11 @@ struct RenderGlobals
 
     Camera cam;
     std::unique_ptr<Program> program;
+    std::unique_ptr<Program> billboard_shader;
     glm::mat4 projection;
+
+    GLuint palette_id;
+    GLuint palette_number;
 
     std::unordered_map<
         std::string,
@@ -105,22 +127,22 @@ struct RenderLevel
 
     std::vector<Wall> walls;
     std::vector<RenderFlat> flats;
+    std::vector<RenderThing> things;
 };
 
 
 
-
 RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g);
+uint16_t get_ssector(int16_t x, int16_t y, Level const &lvl);
 void draw_level(RenderLevel const &lvl, RenderGlobals const &g);
 void draw_node(
-    size_t index,
+    uint16_t index,
     RenderLevel const &lvl,
     RenderGlobals const &g);
 void draw_ssector(
-    size_t index,
+    uint16_t index,
     RenderLevel const &lvl,
     RenderGlobals const &g);
-Uint32 callback60hz(Uint32, void *);
 
 
 
@@ -160,10 +182,25 @@ int main(int argc, char *argv[])
         mission = 1;
 
     auto wad = readwad(wadfile);
-    auto level = readlevel(
-        "E" + std::to_string(episode) + "M" + std::to_string(mission),
-        wadfile,
-        wad);
+    Level level{};
+    try
+    {
+        level = readlevel(
+            (   "E"
+                + std::to_string(episode)
+                + "M"
+                + std::to_string(mission)),
+            wadfile,
+            wad);
+    }
+    catch (std::runtime_error &e)
+    {
+        episode = 0;
+        level = readlevel(
+            "MAP" + std::to_string(episode) + std::to_string(mission),
+            wadfile,
+            wad);
+    }
 
 
     RenderGlobals g{};
@@ -207,15 +244,48 @@ int main(int argc, char *argv[])
         glm::vec3(0, 1, 0)};
 
     /* load projection matrix */
+    double const fov = 60;
     g.projection = glm::perspective(
-        glm::radians(45.0),
+        glm::radians(fov),
         (double)g.width / (double)g.height,
         0.1, 10000.0);
 
-    /* load the shader */
+    /* load the shaders */
     g.program.reset(new Program{
         Shader{GL_VERTEX_SHADER, "shaders/vertex.glvs"},
         Shader{GL_FRAGMENT_SHADER, "shaders/fragment.glfs"}});
+    g.billboard_shader.reset(new Program{
+        Shader{GL_VERTEX_SHADER, "shaders/billboard.glvs"},
+        Shader{GL_FRAGMENT_SHADER, "shaders/fragment.glfs"}});
+
+
+    /* set up the palette */
+    g.palette_number = 0;
+    auto palette = new uint8_t[14][256][3];
+    for (size_t i = 0; i < 14; ++i)
+    {
+        auto &pal = level.wad->palettes[i];
+        for (size_t j = 0; j < 256; ++j)
+        {
+            palette[i][j][0] = pal[(j * 3) + 0];
+            palette[i][j][1] = pal[(j * 3) + 1];
+            palette[i][j][2] = pal[(j * 3) + 2];
+        }
+    }
+    glGenTextures(1, &g.palette_id);
+    glBindTexture(GL_TEXTURE_2D, g.palette_id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGB8,
+        256, 14,
+        0,
+        GL_RGB,
+        GL_UNSIGNED_BYTE,
+        palette);
+    delete[] palette;
 
 
     /* make GLTextures from the textures */
@@ -224,14 +294,12 @@ int main(int argc, char *argv[])
         auto &name = pair.first;
         auto &tex = pair.second;
 
-        auto *imgdata = new uint32_t[tex.data.size()];
+        auto imgdata = new uint32_t[tex.data.size()];
         for (size_t i = 0; i < tex.data.size(); ++i)
         {
-            imgdata[i] = level.wad->palette[tex.data[i]];
-            if (!tex.opaque[i])
-            {
-                imgdata[i] &= 0x00FFFFFF;
-            }
+            imgdata[i] =\
+                ((tex.opaque[i]? 0xFF : 0) << 8)
+                | tex.data[i];
         }
         g.textures.emplace(
             tolowercase(name),
@@ -245,10 +313,11 @@ int main(int argc, char *argv[])
         auto &name = pair.first;
         auto &flat = pair.second;
 
-        auto *imgdata = new uint32_t[flat.size()];
+        auto *imgdata = new uint8_t[flat.size() * 2];
         for (size_t i = 0; i < flat.size(); ++i)
         {
-            imgdata[i] = level.wad->palette[flat[i]];
+            imgdata[(i * 2) + 0] = flat[i];
+            imgdata[(i * 2) + 1] = 0xFF;
         }
         g.flats.emplace(
             name,
@@ -270,8 +339,9 @@ int main(int argc, char *argv[])
 
     auto renderlevel = make_renderlevel(level, g);
 
-    glm::vec3 delta(0);
+    glm::vec3 delta{0};
     SDL_Event e;
+    bool paused = false;
     for (bool running = true; running; )
     {
         while (SDL_PollEvent(&e) && running)
@@ -282,106 +352,158 @@ int main(int argc, char *argv[])
                 running = false;
                 break;
 
-            case SDL_MOUSEMOTION:
-                g.cam.rotate(
-                    -e.motion.xrel / 10.0,
-                    -e.motion.yrel / 10.0);
-                break;
-
-            case SDL_KEYDOWN:
-                switch (e.key.keysym.sym)
-                {
-                case SDLK_d:
-                    delta.x = +10;
-                    break;
-                case SDLK_a:
-                    delta.x = -10;
-                    break;
-                case SDLK_z:
-                    delta.y = +10;
-                    break;
-                case SDLK_x:
-                    delta.y = -10;
-                    break;
-                case SDLK_w:
-                    delta.z = +10;
-                    break;
-                case SDLK_s:
-                    delta.z = -10;
-                    break;
-                }
-                break;
-
-            case SDL_KEYUP:
-                switch (e.key.keysym.sym)
-                {
-                case SDLK_a:
-                case SDLK_d:
-                    delta.x = 0;
-                    break;
-                case SDLK_z:
-                case SDLK_x:
-                    delta.y = 0;
-                    break;
-                case SDLK_w:
-                case SDLK_s:
-                    delta.z = 0;
-                    break;
-
-                case SDLK_SPACE:
-                    mission += 1;
-                    if (mission > 9)
-                    {
-                        mission = 1;
-                        episode += 1;
-                        if (episode > 3)
-                        {
-                            episode = 1;
-                        }
-                    }
-                    level = readlevel(
-                            (   "E"
-                                + std::to_string(episode)
-                                + "M"
-                                + std::to_string(mission)),
-                            wadfile,
-                            wad);
-                    renderlevel = make_renderlevel(level, g);
-
-                    for (auto &thing : level.things)
-                    {
-                        if (thing.type == 1)
-                        {
-                            g.cam.pos.x = -thing.x;
-                            g.cam.pos.z = thing.y;
-                        }
-                    }
-                }
-                break;
-
-
             case SDL_WINDOWEVENT:
-                switch (e.window.event)
+                if (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
                 {
-                case SDL_WINDOWEVENT_SIZE_CHANGED:
                     g.width  = e.window.data1;
                     g.height = e.window.data2;
 
                     glViewport(0, 0, g.width, g.height);
                     g.projection = glm::perspective(
-                        glm::radians(45.0),
+                        glm::radians(fov),
                         (double)g.width / (double)g.height,
                         0.1, 10000.0);
+                }
+                break;
+            case SDL_KEYUP:
+                if (e.key.keysym.sym == SDLK_ESCAPE)
+                {
+                    if (paused)
+                    {
+                        SDL_SetRelativeMouseMode(SDL_TRUE);
+                    }
+                    else
+                    {
+                        SDL_SetRelativeMouseMode(SDL_FALSE);
+                    }
+                    paused = !paused;
                     break;
                 }
                 break;
             }
+            if (!paused)
+            {
+                switch (e.type)
+                {
+                case SDL_MOUSEMOTION:
+                    g.cam.rotate(
+                        -e.motion.xrel / 10.0,
+                        -e.motion.yrel / 10.0);
+                    break;
+
+                case SDL_KEYDOWN:
+                    switch (e.key.keysym.sym)
+                    {
+                    case SDLK_d:
+                        delta.x = +10;
+                        break;
+                    case SDLK_a:
+                        delta.x = -10;
+                        break;
+                    case SDLK_w:
+                        delta.z = +10;
+                        break;
+                    case SDLK_s:
+                        delta.z = -10;
+                        break;
+                    }
+                    break;
+
+                case SDL_KEYUP:
+                    switch (e.key.keysym.sym)
+                    {
+                    case SDLK_a:
+                    case SDLK_d:
+                        delta.x = 0;
+                        break;
+                    case SDLK_w:
+                    case SDLK_s:
+                        delta.z = 0;
+                        break;
+
+                    case SDLK_SPACE:
+                        mission += 1;
+                        if (mission > 9)
+                        {
+                            mission = 1;
+                            episode += 1;
+                            if (episode > 3)
+                            {
+                                episode = 1;
+                            }
+                        }
+                        for (auto &t : renderlevel.things)
+                        {
+                            delete t.sprite;
+                        }
+                        try
+                        {
+                            level = readlevel(
+                                (   "E"
+                                    + std::to_string(episode)
+                                    + "M"
+                                    + std::to_string(mission)),
+                                wadfile,
+                                wad);
+                        }
+                        catch (std::runtime_error &e)
+                        {
+                            level = readlevel(
+                                (   "MAP"
+                                    + std::to_string(episode)
+                                    + std::to_string(mission)),
+                                wadfile,
+                                wad);
+                        }
+                        renderlevel = make_renderlevel(level, g);
+
+                        for (auto &thing : level.things)
+                        {
+                            if (thing.type == 1)
+                            {
+                                g.cam.pos.x = -thing.x;
+                                g.cam.pos.z = thing.y;
+                                break;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
         }
 
         g.cam.move(delta);
+        int ssector = -1;
+        try
+        {
+            ssector = get_ssector(-g.cam.pos.x, g.cam.pos.z, level);
+        }
+        catch (std::runtime_error &e)
+        {
+        }
+        if (ssector != -1)
+        {
+            auto &seg = level.segs[level.ssectors[ssector].start];
+            auto &ld = level.linedefs[seg.linedef];
+            g.cam.pos.y = (
+                seg.direction?
+                    ld.left
+                    : ld.right)->sector->floor + 48;
+        }
 
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        g.program->use();
+        g.program->set("camera", g.cam.matrix());
+        g.program->set("projection", g.projection);
+        g.program->set("palettes", 0);
+        g.program->set("palette", g.palette_number);
+        g.program->set("tex", 1);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, g.palette_id);
+        glActiveTexture(GL_TEXTURE1);
 
         draw_level(renderlevel, g);
 
@@ -391,6 +513,10 @@ int main(int argc, char *argv[])
 
 
     /* cleanup */
+    for (auto &t : renderlevel.things)
+    {
+        delete t.sprite;
+    }
     SDL_GL_DeleteContext(context);
     SDL_DestroyWindow(win);
     SDL_Quit();
@@ -405,6 +531,94 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
 {
     RenderLevel out{};
     out.raw = &lvl;
+
+    /* make RenderThings from things */
+    for (auto &thing : lvl.things)
+    {
+        if (thing.options & SKILL12)
+        {
+            auto &data = thingdata[thing.type];
+            Picture const *spr = nullptr;
+            switch (data.frames)
+            {
+            case -1:
+                /* no image */
+                break;
+            case 0:
+                spr = &lvl.wad->sprites[data.sprite + "A1"];
+                break;
+            default:
+                if (data.frames > 0)
+                {
+                    spr = &lvl.wad->sprites[data.sprite + "A0"];
+                }
+                else
+                {
+                    spr = &lvl.wad->sprites[
+                        data.sprite
+                        + std::string(
+                            1, 'A' + (-data.frames - 2))
+                        + "0"];
+                }
+                break;
+            }
+
+            /* get the thing's y position
+             * (ie. the floor height of the sector it's inside) */
+            int ssector = -1;
+            try
+            {
+                ssector = get_ssector(thing.x, thing.y, lvl);
+            }
+            catch (std::runtime_error &e)
+            {
+            }
+
+            double y = 0;
+            if (ssector != -1)
+            {
+                auto &seg = lvl.segs[lvl.ssectors[ssector].start];
+                auto &ld = lvl.linedefs[seg.linedef];
+                y = (
+                    seg.direction?
+                        ld.left
+                        : ld.right)->sector->floor;
+            }
+
+            /* make the picture data */
+            if (spr != nullptr)
+            {
+                auto imgdata = new uint32_t[spr->data.size()];
+                for (size_t i = 0; i < spr->data.size(); ++i)
+                {
+                    imgdata[i] =\
+                        ((spr->opaque[i]? 0xFF : 0) << 8)
+                        | spr->data[i];
+                }
+
+                /* TODO: figure out the left/top offsets */
+                GLfloat w = spr->width,
+                        h = spr->height;
+                out.things.emplace_back(
+                    new GLTexture{spr->width, spr->height, imgdata},
+                    new Mesh{{
+                        {0, 0, 0,  0, 1},
+                        {w, 0, 0,  1, 1},
+                        {w, h, 0,  1, 0},
+                        {0, h, 0,  0, 0}},
+                        {0,1,2, 2,3,0}},
+                    glm::vec3(-thing.x, y, thing.y));
+                delete[] imgdata;
+            }
+            else
+            {
+                out.things.emplace_back(
+                    nullptr,
+                    nullptr,
+                    glm::vec3(-thing.x, y, thing.y));
+            }
+        }
+    }
 
     /* create Walls from the linedefs */
     for (auto &ld : lvl.linedefs)
@@ -427,29 +641,33 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
                 out.walls.emplace_back(nullptr, nullptr);
 
                 std::string texname = tolowercase(ld.right->middle);
-                out.walls.back().middletex = g.textures[texname].get();
-                len /= g.textures[texname]->width;
-                hgt /= g.textures[texname]->height;
+                if (texname != "-")
+                {
+                    out.walls.back().middletex =\
+                        g.textures[texname].get();
+                    len /= g.textures[texname]->width;
+                    hgt /= g.textures[texname]->height;
 
-                bool unpegged = ld.flags & UNPEGGEDLOWER;
-                double sx = 0,
-                       sy = unpegged? -hgt : 0;
-                double ex = len,
-                       ey = unpegged? 0 : hgt;
+                    bool unpegged = ld.flags & UNPEGGEDLOWER;
+                    double sx = 0,
+                           sy = unpegged? -hgt : 0;
+                    double ex = len,
+                           ey = unpegged? 0 : hgt;
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnarrowing"
-                out.walls.back().middlemesh.reset(new Mesh{
-                    {
-                        {-ld.start->x, bot, ld.start->y,  sx, ey},
-                        {-ld.end->x  , bot, ld.end->y  ,  ex, ey},
-                        {-ld.end->x  , top, ld.end->y  ,  ex, sy},
-                        {-ld.start->x, top, ld.start->y,  sx, sy},
-                    },
-                    {
-                        0, 1, 2,
-                        2, 3, 0
-                    }});
+                    out.walls.back().middlemesh.reset(new Mesh{
+                        {
+                            {-ld.start->x, bot, ld.start->y,  sx, ey},
+                            {-ld.end->x  , bot, ld.end->y  ,  ex, ey},
+                            {-ld.end->x  , top, ld.end->y  ,  ex, sy},
+                            {-ld.start->x, top, ld.start->y,  sx, sy},
+                        },
+                        {
+                            0, 1, 2,
+                            2, 3, 0
+                        }});
+                }
 #pragma GCC diagnostic pop
             }
             /* middle (left side) */
@@ -466,29 +684,33 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
                 out.walls.emplace_back(nullptr, nullptr);
 
                 std::string texname = tolowercase(ld.right->middle);
-                out.walls.back().middletex = g.textures[texname].get();
-                len /= g.textures[texname]->width;
-                hgt /= g.textures[texname]->height;
+                if (texname != "-")
+                {
+                    out.walls.back().middletex =\
+                        g.textures[texname].get();
+                    len /= g.textures[texname]->width;
+                    hgt /= g.textures[texname]->height;
 
-                bool unpegged = ld.flags & UNPEGGEDLOWER;
-                double sx = 0,
-                       sy = unpegged? -hgt : 0;
-                double ex = len,
-                       ey = unpegged? 0 : hgt;
+                    bool unpegged = ld.flags & UNPEGGEDLOWER;
+                    double sx = 0,
+                           sy = unpegged? -hgt : 0;
+                    double ex = len,
+                           ey = unpegged? 0 : hgt;
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnarrowing"
-                out.walls.back().middlemesh.reset(new Mesh{
-                    {
-                        {-ld.start->x, bot, ld.start->y,  sx, ey},
-                        {-ld.end->x  , bot, ld.end->y  ,  ex, ey},
-                        {-ld.end->x  , top, ld.end->y  ,  ex, sy},
-                        {-ld.start->x, top, ld.start->y,  sx, sy},
-                    },
-                    {
-                        2, 1, 0,
-                        0, 3, 2
-                    }});
+                    out.walls.back().middlemesh.reset(new Mesh{
+                        {
+                            {-ld.start->x, bot, ld.start->y,  sx, ey},
+                            {-ld.end->x  , bot, ld.end->y  ,  ex, ey},
+                            {-ld.end->x  , top, ld.end->y  ,  ex, sy},
+                            {-ld.start->x, top, ld.start->y,  sx, sy},
+                        },
+                        {
+                            2, 1, 0,
+                            0, 3, 2
+                        }});
+                }
 #pragma GCC diagnostic pop
             }
             /* lower section */
@@ -507,55 +729,53 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
                         ld.left->sector->floor
                         : ld.right->sector->floor);
 
-                std::string texname =\
-                    (right_is_top? ld.left->lower : ld.right->lower);
-                if (texname == "-")
+                std::string texname = tolowercase(
+                    (right_is_top?
+                        ld.left
+                        : ld.right)->lower);
+                if (texname != "-")
                 {
-                    /* TODO: deal with this properly */
-                    texname = "aastinky";
-                }
-                texname = tolowercase(texname);
+                    auto const tex = g.textures[texname].get();
+                    out.walls.back().lowertex = tex;
+                    double len =\
+                        sqrt(
+                            pow(ld.end->x - ld.start->x, 2)
+                            + pow(ld.end->y - ld.start->y, 2))
+                        / (double)tex->width;
+                    double hgt = abs(top - bot) / (double)tex->height;
 
-                auto const tex = g.textures[texname].get();
-                out.walls.back().lowertex = tex;
-                double len =\
-                    sqrt(
-                        pow(ld.end->x - ld.start->x, 2)
-                        + pow(ld.end->y - ld.start->y, 2))
-                    / (double)tex->width;
-                double hgt = abs(top - bot) / (double)tex->height;
+                    bool unpegged = ld.flags & UNPEGGEDLOWER;
+                    double sx = 0,
+                           sy = 0;
+                    double ex = len,
+                           ey = hgt;
 
-                bool unpegged = ld.flags & UNPEGGEDLOWER;
-                double sx = 0,
-                       sy = 0;
-                double ex = len,
-                       ey = hgt;
-
-                if (unpegged)
-                {
-                    double offset =\
-                        (   glm::max(
-                                ld.right->sector->ceiling,
-                                ld.left->sector->ceiling)
-                            - top)
-                        / (double)tex->height;
-                    sy += offset;
-                    ey += offset;
-                }
+                    if (unpegged)
+                    {
+                        double offset =\
+                            (   glm::max(
+                                    ld.right->sector->ceiling,
+                                    ld.left->sector->ceiling)
+                                - top)
+                            / (double)tex->height;
+                        sy += offset;
+                        ey += offset;
+                    }
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnarrowing"
-                out.walls.back().lowermesh.reset(new Mesh{
-                    {
-                        {-ld.start->x, bot, ld.start->y,  sx, ey},
-                        {-ld.end->x,   bot, ld.end->y,    ex, ey},
-                        {-ld.end->x,   top, ld.end->y,    ex, sy},
-                        {-ld.start->x, top, ld.start->y,  sx, sy},
-                    },
-                    {
-                        0, 1, 2,
-                        2, 3, 0,
-                    }});
+                    out.walls.back().lowermesh.reset(new Mesh{
+                        {
+                            {-ld.start->x, bot, ld.start->y,  sx, ey},
+                            {-ld.end->x,   bot, ld.end->y,    ex, ey},
+                            {-ld.end->x,   top, ld.end->y,    ex, sy},
+                            {-ld.start->x, top, ld.start->y,  sx, sy},
+                        },
+                        {
+                            0, 1, 2,
+                            2, 3, 0,
+                        }});
+                }
 #pragma GCC diagnostic pop
             }
             /* upper section */
@@ -574,43 +794,41 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
                         ld.left->sector->ceiling
                         : ld.right->sector->ceiling);
 
-                std::string texname =\
-                    (right_is_top? ld.right->upper : ld.left->upper);
-                if (texname == "-")
+                std::string texname = tolowercase(
+                    (right_is_top?
+                        ld.right
+                        : ld.left)->upper);
+                if (texname != "-")
                 {
-                    /* TODO: deal with this properly */
-                    texname = "aastinky";
-                }
-                texname = tolowercase(texname);
+                    auto tex = g.textures[texname].get();
+                    out.walls.back().uppertex = tex;
+                    double len =\
+                        sqrt(
+                            pow(ld.end->x - ld.start->x, 2)
+                            + pow(ld.end->y - ld.start->y, 2))
+                        / (double)tex->width;
+                    double hgt = abs(top - bot) / (double)tex->height;
 
-                auto tex = g.textures[texname].get();
-                out.walls.back().uppertex = tex;
-                double len =\
-                    sqrt(
-                        pow(ld.end->x - ld.start->x, 2)
-                        + pow(ld.end->y - ld.start->y, 2))
-                    / (double)tex->width;
-                double hgt = abs(top - bot) / (double)tex->height;
-
-                bool unpegged = ld.flags & UNPEGGEDUPPER;
-                double sx = 0,
-                       sy = unpegged? 0 : -hgt;
-                double ex = len,
-                       ey = unpegged? hgt : 0;
+                    bool unpegged = ld.flags & UNPEGGEDUPPER;
+                    double sx = 0,
+                           sy = unpegged? 0 : -hgt;
+                    double ex = len,
+                           ey = unpegged? hgt : 0;
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnarrowing"
-                out.walls.back().uppermesh.reset(new Mesh{
-                    {
-                        {-ld.start->x, bot, ld.start->y,  sx, ey},
-                        {-ld.end->x,   bot, ld.end->y,    ex, ey},
-                        {-ld.end->x,   top, ld.end->y,    ex, sy},
-                        {-ld.start->x, top, ld.start->y,  sx, sy},
-                    },
-                    {
-                        0, 1, 2,
-                        2, 3, 0,
-                    }});
+                    out.walls.back().uppermesh.reset(new Mesh{
+                        {
+                            {-ld.start->x, bot, ld.start->y,  sx, ey},
+                            {-ld.end->x,   bot, ld.end->y,    ex, ey},
+                            {-ld.end->x,   top, ld.end->y,    ex, sy},
+                            {-ld.start->x, top, ld.start->y,  sx, sy},
+                        },
+                        {
+                            0, 1, 2,
+                            2, 3, 0,
+                        }});
+                }
 #pragma GCC diagnostic pop
             }
         }
@@ -624,13 +842,10 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
                 + pow(ld.end->y - ld.start->y, 2));
             double hgt = abs(top - bot);
 
-            if (ld.right->middle != "-")
-            {
-                std::string texname = tolowercase(ld.right->middle);
-                out.walls.back().middletex = g.textures[texname].get();
-                len /= g.textures[texname]->width;
-                hgt /= g.textures[texname]->height;
-            }
+            std::string texname = tolowercase(ld.right->middle);
+            out.walls.back().middletex = g.textures[texname].get();
+            len /= g.textures[texname]->width;
+            hgt /= g.textures[texname]->height;
 
             bool unpegged = ld.flags & UNPEGGEDLOWER;
             double sx = 0,
@@ -655,6 +870,7 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
         }
     }
 
+#if 0
     /* create the floors/ceilings from ssectors */
     for (auto &ssector : lvl.ssectors)
     {
@@ -767,6 +983,7 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
             g.flats[ld.right->sector->ceiling_flat].get(),
             new Mesh{ceiling_verts});
     }
+#endif
 
     return out;
 }
@@ -774,21 +991,17 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
 
 void draw_level(RenderLevel const &lvl, RenderGlobals const &g)
 {
-    g.program->use();
-    g.program->set("camera", g.cam.matrix());
-    g.program->set("projection", g.projection);
-
     /* draw the walls */
     draw_node(lvl.raw->nodes.size() - 1, lvl, g);
 
-
+#if 0
     /* draw the flats */
     for (auto &flat : lvl.flats)
     {
         /* floor */
-        glBindTexture(GL_TEXTURE_2D, flat.floortex->id());
-        glActiveTexture(GL_TEXTURE0);
-        g.program->set("tex", 0);
+        glActiveTexture(GL_TEXTURE1);
+        flat.floortex->bind();
+        g.program->set("tex", 1);
         g.program->set("xoffset", 0);
         g.program->set("yoffset", 0);
 
@@ -800,9 +1013,8 @@ void draw_level(RenderLevel const &lvl, RenderGlobals const &g)
             0);
 
         /* ceiling */
-        glBindTexture(GL_TEXTURE_2D, flat.ceilingtex->id());
-        glActiveTexture(GL_TEXTURE0);
-        g.program->set("tex", 0);
+        flat.ceilingtex->bind();
+        g.program->set("tex", 1);
         g.program->set("xoffset", 0);
         g.program->set("yoffset", 0);
 
@@ -813,10 +1025,43 @@ void draw_level(RenderLevel const &lvl, RenderGlobals const &g)
             GL_UNSIGNED_INT,
             0);
     }
+#endif
+
+    /* draw the things */
+    g.billboard_shader->use();
+    g.billboard_shader->set("camera", g.cam.matrix());
+    g.billboard_shader->set("projection", g.projection);
+    g.billboard_shader->set("palettes", 0);
+    g.billboard_shader->set("palette", g.palette_number);
+    g.billboard_shader->set("tex", 1);
+    g.billboard_shader->set("xoffset", 0);
+    g.billboard_shader->set("yoffset", 0);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g.palette_id);
+    glActiveTexture(GL_TEXTURE1);
+    for (auto &t : lvl.things)
+    {
+        if (t.sprite != nullptr)
+        {
+            t.sprite->bind();
+            g.billboard_shader->set("model",
+                glm::translate(glm::mat4(1), t.pos));
+
+            t.mesh->bind();
+            glDrawElements(
+                GL_TRIANGLES,
+                t.mesh->size(),
+                GL_UNSIGNED_INT,
+                0);
+        }
+    }
+
+
 }
 
 void draw_node(
-    size_t index,
+    uint16_t index,
     RenderLevel const &lvl,
     RenderGlobals const &g)
 {
@@ -840,7 +1085,7 @@ void draw_node(
 }
 
 void draw_ssector(
-    size_t index,
+    uint16_t index,
     RenderLevel const &lvl,
     RenderGlobals const &g)
 {
@@ -848,25 +1093,24 @@ void draw_ssector(
 
     for (size_t i = 0; i < ssector.count; ++i)
     {
-        auto &seg = lvl.raw->segs.at(ssector.start + i);
-        auto &wall = lvl.walls.at(seg.linedef);
+        auto &seg = lvl.raw->segs[ssector.start + i];
+        auto &wall = lvl.walls[seg.linedef];
 
         if (wall.uppermesh != nullptr)
         {
+            g.program->set("xoffset",
+                lvl.raw->linedefs[seg.linedef].right->x);
+            g.program->set("yoffset",
+                lvl.raw->linedefs[seg.linedef].right->y);
+
             if (wall.uppertex != nullptr)
             {
-                glBindTexture(GL_TEXTURE_2D, wall.uppertex->id());
+                wall.uppertex->bind();
             }
             else
             {
                 glBindTexture(GL_TEXTURE_2D, 0);
             }
-            glActiveTexture(GL_TEXTURE0);
-            g.program->set("tex", 0);
-            g.program->set("xoffset",
-                lvl.raw->linedefs[seg.linedef].right->x);
-            g.program->set("yoffset",
-                lvl.raw->linedefs[seg.linedef].right->y);
 
             wall.uppermesh->bind();
             glDrawElements(
@@ -879,18 +1123,12 @@ void draw_ssector(
         {
             if (wall.middletex != nullptr)
             {
-                glBindTexture(GL_TEXTURE_2D, wall.middletex->id());
+                wall.middletex->bind();
             }
             else
             {
                 glBindTexture(GL_TEXTURE_2D, 0);
             }
-            glActiveTexture(GL_TEXTURE0);
-            g.program->set("tex", 0);
-            g.program->set("xoffset",
-                lvl.raw->linedefs[seg.linedef].right->x);
-            g.program->set("yoffset",
-                lvl.raw->linedefs[seg.linedef].right->y);
 
             wall.middlemesh->bind();
             glDrawElements(
@@ -903,18 +1141,12 @@ void draw_ssector(
         {
             if (wall.middletex2 != nullptr)
             {
-                glBindTexture(GL_TEXTURE_2D, wall.middletex2->id());
+                wall.middletex2->bind();
             }
             else
             {
                 glBindTexture(GL_TEXTURE_2D, 0);
             }
-            glActiveTexture(GL_TEXTURE0);
-            g.program->set("tex", 0);
-            g.program->set("xoffset",
-                lvl.raw->linedefs[seg.linedef].right->x);
-            g.program->set("yoffset",
-                lvl.raw->linedefs[seg.linedef].right->y);
 
             wall.middlemesh2->bind();
             glDrawElements(
@@ -927,18 +1159,12 @@ void draw_ssector(
         {
             if (wall.lowertex != nullptr)
             {
-                glBindTexture(GL_TEXTURE_2D, wall.lowertex->id());
+                wall.lowertex->bind();
             }
             else
             {
                 glBindTexture(GL_TEXTURE_2D, 0);
             }
-            glActiveTexture(GL_TEXTURE0);
-            g.program->set("tex", 0);
-            g.program->set("xoffset",
-                lvl.raw->linedefs[seg.linedef].right->x);
-            g.program->set("yoffset",
-                lvl.raw->linedefs[seg.linedef].right->y);
 
             wall.lowermesh->bind();
             glDrawElements(
@@ -948,5 +1174,61 @@ void draw_ssector(
                 0);
         }
     }
+}
+
+
+
+uint16_t _get_ssector_interior(
+    int16_t x,
+    int16_t y,
+    Level const &lvl,
+    uint16_t node)
+{
+    auto &n = lvl.nodes[node];
+    uint16_t number = 0;
+
+    double part_angle = atan2((double)n.dy, (double)n.dx);
+    double xy_angle = atan2(
+        (double)y - (double)n.y,
+        (double)x - (double)n.x);
+
+    bool right = false;
+    if (copysign(1, part_angle) != copysign(1, xy_angle))
+    {
+        part_angle = atan2(-(double)n.dy, -(double)n.dx);
+        right = (xy_angle > part_angle);
+    }
+    else
+    {
+        right = (xy_angle < part_angle);
+    }
+
+    int16_t lower_x = right? n.right_lower_x : n.left_lower_x,
+            upper_x = right? n.right_upper_x : n.left_upper_x,
+            lower_y = right? n.right_lower_y : n.left_lower_y,
+            upper_y = right? n.right_upper_y : n.left_upper_y;
+
+    if (lower_x <= x && x <= upper_x && lower_y <= y && y <= upper_y)
+    {
+        number = right? n.right : n.left;
+    }
+    else
+    {
+        throw std::runtime_error("out of bounds");
+    }
+
+    if (number & 0x8000)
+    {
+        return number & 0x7FFF;
+    }
+    else
+    {
+        return _get_ssector_interior(x, y, lvl, number);
+    }
+}
+
+uint16_t get_ssector(int16_t x, int16_t y, Level const &lvl)
+{
+    return _get_ssector_interior(x, y, lvl, lvl.nodes.size() - 1);
 }
 

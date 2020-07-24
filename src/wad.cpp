@@ -10,22 +10,20 @@
 
 
 
-size_t WAD::lumpidx(char const *name, size_t start) const
+size_t WAD::lumpidx(std::string name, size_t start) const
 {
     for (size_t i = start; i < directory.size(); ++i)
     {
-        if (strncasecmp(name, directory[i].name, 8) == 0)
+        if (strncasecmp(name.c_str(), directory[i].name, 8) == 0)
         {
             return i;
         }
     }
     throw std::runtime_error(
-        "Couldn't find a lump named '"
-        + std::string(name)
-        + "'");
+        "Couldn't find a lump named '" + name + "'");
 }
 
-DirEntry const &WAD::findlump(char const *name, size_t start) const
+DirEntry const &WAD::findlump(std::string name, size_t start) const
 {
     return directory[lumpidx(name, start)];
 }

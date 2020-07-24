@@ -15,7 +15,7 @@
 
 
 /* pixel format: xxBBGGRR, xx=unused */
-typedef std::array<uint32_t, 256> Palette;
+typedef uint8_t Palette[256 * 3];
 
 
 
@@ -269,7 +269,7 @@ struct Picture
 
 struct Level
 {
-    class WAD const *wad;
+    class WAD /*const*/ *wad;
 
     std::unordered_map<std::string, Flat> flats;
 
@@ -301,15 +301,16 @@ public:
     std::vector<DirEntry> directory;
 
     std::vector<size_t> pnames;
-    Palette palette;
+    std::array<Palette, 14> palettes;
     std::unordered_map<std::string, Texture> textures;
     std::unordered_map<std::string, Flat> flats;
+    std::unordered_map<std::string, Picture> sprites;
 
     /* get the lump's index in the WAD's directory */
-    size_t lumpidx(char const *name, size_t start=0) const;
+    size_t lumpidx(std::string name, size_t start=0) const;
 
     /* get the lump itself */
-    DirEntry const &findlump(char const *name, size_t start=0) const;
+    DirEntry const &findlump(std::string name, size_t start=0) const;
 };
 
 

@@ -6,20 +6,28 @@ in vec2 texCoord;
 
 out vec4 FragColor;
 
-uniform sampler2D tex;
+uniform sampler2D palettes;
+uniform int palette;
+
+uniform usampler2D tex;
 uniform int xoffset;
 uniform int yoffset;
 
 
 void main()
 {
-    vec4 color = texture(
+    uvec4 tmp = texture(
         tex,
         vec2(texCoord.x + xoffset, texCoord.y + yoffset));
-    if (color.a != 1.0)
+
+    uint index = tmp.r;
+    uint alpha = tmp.g;
+
+    vec4 color = texelFetch(palettes, ivec2(index, palette), 0);
+    if (alpha == 0U)
     {
         discard;
     }
-    FragColor = color;
+    FragColor = vec4(color.rgb, 1);
 }
 

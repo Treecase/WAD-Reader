@@ -3,6 +3,7 @@
  */
 
 #include "readwad.hpp"
+#include "things.hpp"
 #include "wad.hpp"
 
 #include <cstdio>
@@ -74,23 +75,23 @@ WAD readwad(FILE *f)
     dir = wad.findlump("PLAYPAL");
     fseek(f, dir.offset, SEEK_SET);
 
-    uint8_t pal8[256][3];
-    fread(pal8, 3, 256, f);
-    for (size_t i = 0; i < 256; ++i)
+    for (size_t i = 0; i < wad.palettes.size(); ++i)
     {
-        wad.palette[i] =\
-            pal8[i][0]
-            | (pal8[i][1] <<  8)
-            | (pal8[i][2] << 16)
-            | 0xFF000000;
+        fread(&wad.palettes[i], 3, 256, f);
     }
 
 
     /* load textures */
     auto tds = readtexturedefs(f, wad, "TEXTURE1");
-    for (auto &td : readtexturedefs(f, wad, "TEXTURE2"))
+    try
     {
-        tds.push_back(td);
+        for (auto &td : readtexturedefs(f, wad, "TEXTURE2"))
+        {
+            tds.push_back(td);
+        }
+    }
+    catch (std::runtime_error &e)
+    {
     }
 
     for (auto &td : tds)
@@ -98,7 +99,6 @@ WAD readwad(FILE *f)
         wad.textures[std::string(td.name)] =\
             buildtexture(f, wad, td);
     }
-
 
     /* load the flats */
     size_t f_start = wad.lumpidx("F_START"),
@@ -108,11 +108,18 @@ WAD readwad(FILE *f)
         auto &lump = wad.directory[i];
         fseek(f, lump.offset, SEEK_SET);
 
-        wad.flats[wad.directory[i].name] = Flat{};
-        fread(wad.flats[wad.directory[i].name].data(), 1, 4096, f);
+        wad.flats[lump.name] = Flat{};
+        fread(wad.flats[lump.name].data(), 1, 4096, f);
     }
 
-
+    /* load the sprites */
+    size_t s_start = wad.lumpidx("S_START"),
+           s_end = wad.lumpidx("S_END");
+    for (size_t i = s_start + 1; i < s_end; ++i)
+    {
+        auto &lump = wad.directory[i];
+        wad.sprites[lump.name] = loadpicture(f, lump);
+    }
 
     return wad;
 }
@@ -386,13 +393,9 @@ std::vector<TextureDefinition> readtexturedefs(
 
 
 
-Picture loadpicture(
-    FILE *f,
-    WAD const &wad,
-    PatchDescriptor const &pd)
+Picture loadpicture(FILE *f, DirEntry const &lump)
 {
-    auto patch = wad.directory[wad.pnames[pd.pname_index]];
-    fseek(f, patch.offset, SEEK_SET);
+    fseek(f, lump.offset, SEEK_SET);
 
     Picture pic{};
 
@@ -412,7 +415,7 @@ Picture loadpicture(
 
     for (size_t x = 0; x < pic.width; ++x)
     {
-        fseek(f, patch.offset + colptrs[x], SEEK_SET);
+        fseek(f, lump.offset + colptrs[x], SEEK_SET);
 
         for (;;)
         {
@@ -443,8 +446,8 @@ Picture loadpicture(
 
 #ifdef wad_DO_PATCH_PGMS
     {
-    printf("%s.pgm\n", patch.name);
-    auto name = "patches/" + std::string(patch.name) + ".pgm";
+    printf("%s.pgm\n", lump.name);
+    auto name = "patches/" + std::string(lump.name) + ".pgm";
     FILE *pgm = fopen(name.c_str(), "w");
     if (pgm != nullptr)
     {
@@ -482,7 +485,9 @@ Texture buildtexture(
 
     for (auto &pd : td.patchdescs)
     {
-        auto pic = loadpicture(f, wad, pd);
+        auto pic = loadpicture(
+            f,
+            wad.directory[wad.pnames[pd.pname_index]]);
 
         for (size_t y = 0; y < pic.height; ++y)
         {

@@ -23,10 +23,7 @@ std::vector<TextureDefinition> readtexturedefs(
     char const lumpname[9]);
 
 /* load a picture */
-Picture loadpicture(
-    FILE *f,
-    WAD const &wad,
-    PatchDescriptor const &pd);
+Picture loadpicture(FILE *f, DirEntry const &lump);
 
 /* flatten patches into a single texture */
 Texture buildtexture(
