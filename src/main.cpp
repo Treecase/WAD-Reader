@@ -86,20 +86,12 @@ struct Wall
 
 struct RenderFlat
 {
-    GLTexture *floortex;
-    std::unique_ptr<Mesh> floormesh;
-    GLTexture *ceilingtex;
-    std::unique_ptr<Mesh> ceilingmesh;
+    GLTexture *tex;
+    Mesh *mesh;
 
-    RenderFlat(
-            GLTexture *floortex,
-            Mesh *floormesh,
-            GLTexture *ceilingtex,
-            Mesh *ceilingmesh)
-    :   floortex{floortex},
-        floormesh{floormesh},
-        ceilingtex{ceilingtex},
-        ceilingmesh{ceilingmesh}
+    RenderFlat(GLTexture *tex, Mesh *mesh)
+    :   tex{tex},
+        mesh{mesh}
     {
     }
 };
@@ -118,7 +110,11 @@ struct RenderGlobals
 
     std::unordered_map<
         std::string,
-        std::unique_ptr<GLTexture>> textures, flats;
+        std::unique_ptr<GLTexture>> textures,
+                                    flats,
+                                    sprites,
+                                    menu_images,
+                                    gui_images;
 };
 
 struct RenderLevel
@@ -126,12 +122,36 @@ struct RenderLevel
     Level const *raw;
 
     std::vector<Wall> walls;
-    std::vector<RenderFlat> flats;
     std::vector<RenderThing> things;
+    std::vector<RenderFlat> floors;
+    std::vector<RenderFlat> ceilings;
+};
+
+enum Weapon
+{
+    Fist = 0,
+    Chainsaw = 1,
+    Pistol = 2,
+    Shotgun = 3,
+    Chaingun = 4,
+    RocketLauncher = 5,
+    PlasmaRifle = 6,
+    BFG9000 = 7
+};
+
+struct Player
+{
+    int bullets, max_bullets;
+    int shells, max_shells;
+    int rockets, max_rockets;
+    int cells, max_cells;
+    int health, armor;
+    unsigned int weapon;
 };
 
 
 
+GLTexture *picture2gltexture(Picture const &pic);
 RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g);
 uint16_t get_ssector(int16_t x, int16_t y, Level const &lvl);
 void draw_level(RenderLevel const &lvl, RenderGlobals const &g);
@@ -156,6 +176,319 @@ std::string tolowercase(std::string const &str)
         [](unsigned char c){ return std::tolower(c); });
     return lower;
 }
+
+
+
+static std::vector<std::string> const menu_lump_names
+{
+    "M_DOOM",
+    "M_RDTHIS",
+    "M_OPTION",
+    "M_QUITG",
+    "M_NGAME",
+    "M_SKULL1",
+    "M_SKULL2",
+    "M_THERMO",
+    "M_THERMR",
+    "M_THERMM",
+    "M_THERML",
+    "M_ENDGAM",
+    "M_PAUSE",
+    "M_MESSG",
+    "M_MSGON",
+    "M_MSGOFF",
+    "M_EPISOD",
+    "M_EPI1",
+    "M_EPI2",
+    "M_EPI3",
+    "M_HURT",
+    "M_JKILL",
+    "M_ROUGH",
+    "M_SKILL",
+    "M_NEWG",
+    "M_ULTRA",
+    "M_NMARE",
+    "M_SVOL",
+    "M_OPTTTL",
+    "M_SAVEG",
+    "M_LOADG",
+    "M_DISP",
+    "M_MSENS",
+    "M_GDHIGH",
+    "M_GDLOW",
+    "M_DETAIL",
+    "M_DISOPT",
+    "M_SCRNSZ",
+    "M_SGTTL",
+    "M_LGTTL",
+    "M_SFXVOL",
+    "M_MUSVOL",
+    "M_LSLEFT",
+    "M_LSCNTR",
+    "M_LSRGHT"
+};
+
+static std::vector<std::string> const gui_lump_names
+{
+    "AMMNUM0",
+    "AMMNUM1",
+    "AMMNUM2",
+    "AMMNUM3",
+    "AMMNUM4",
+    "AMMNUM5",
+    "AMMNUM6",
+    "AMMNUM7",
+    "AMMNUM8",
+    "AMMNUM9",
+    "BRDR_TL",
+    "BRDR_T",
+    "BRDR_TR",
+    "BRDR_L",
+    "BRDR_R",
+    "BRDR_BL",
+    "BRDR_B",
+    "BRDR_BR",
+    "STBAR",
+    "STGNUM0",
+    "STGNUM1",
+    "STGNUM2",
+    "STGNUM3",
+    "STGNUM4",
+    "STGNUM5",
+    "STGNUM6",
+    "STGNUM7",
+    "STGNUM8",
+    "STGNUM9",
+    "STTMINUS",
+    "STTNUM0",
+    "STTNUM1",
+    "STTNUM2",
+    "STTNUM3",
+    "STTNUM4",
+    "STTNUM5",
+    "STTNUM6",
+    "STTNUM7",
+    "STTNUM8",
+    "STTNUM9",
+    "STTPRCNT",
+    "STYSNUM0",
+    "STYSNUM1",
+    "STYSNUM2",
+    "STYSNUM3",
+    "STYSNUM4",
+    "STYSNUM5",
+    "STYSNUM6",
+    "STYSNUM7",
+    "STYSNUM8",
+    "STYSNUM9",
+    "STKEYS0",
+    "STKEYS1",
+    "STKEYS2",
+    "STKEYS3",
+    "STKEYS4",
+    "STKEYS5",
+    "STDISK",
+    "STCDROM",
+    "STARMS",
+    "STCFN033",
+    "STCFN034",
+    "STCFN035",
+    "STCFN036",
+    "STCFN037",
+    "STCFN038",
+    "STCFN039",
+    "STCFN040",
+    "STCFN041",
+    "STCFN042",
+    "STCFN043",
+    "STCFN044",
+    "STCFN045",
+    "STCFN046",
+    "STCFN047",
+    "STCFN048",
+    "STCFN049",
+    "STCFN050",
+    "STCFN051",
+    "STCFN052",
+    "STCFN053",
+    "STCFN054",
+    "STCFN055",
+    "STCFN056",
+    "STCFN057",
+    "STCFN058",
+    "STCFN059",
+    "STCFN060",
+    "STCFN061",
+    "STCFN062",
+    "STCFN063",
+    "STCFN064",
+    "STCFN065",
+    "STCFN066",
+    "STCFN067",
+    "STCFN068",
+    "STCFN069",
+    "STCFN070",
+    "STCFN071",
+    "STCFN072",
+    "STCFN073",
+    "STCFN074",
+    "STCFN075",
+    "STCFN076",
+    "STCFN077",
+    "STCFN078",
+    "STCFN079",
+    "STCFN080",
+    "STCFN081",
+    "STCFN082",
+    "STCFN083",
+    "STCFN084",
+    "STCFN085",
+    "STCFN086",
+    "STCFN087",
+    "STCFN088",
+    "STCFN089",
+    "STCFN090",
+    "STCFN091",
+    "STCFN092",
+    "STCFN093",
+    "STCFN094",
+    "STCFN095",
+    "STCFN121",
+    "STFB1",
+    "STFB0",
+    "STFB2",
+    "STFB3",
+    "STPB1",
+    "STPB0",
+    "STPB2",
+    "STPB3",
+    "STFST01",
+    "STFST00",
+    "STFST02",
+    "STFTL00",
+    "STFTR00",
+    "STFOUCH0",
+    "STFEVL0",
+    "STFKILL0",
+    "STFST11",
+    "STFST10",
+    "STFST12",
+    "STFTL10",
+    "STFTR10",
+    "STFOUCH1",
+    "STFEVL1",
+    "STFKILL1",
+    "STFST21",
+    "STFST20",
+    "STFST22",
+    "STFTL20",
+    "STFTR20",
+    "STFOUCH2",
+    "STFEVL2",
+    "STFKILL2",
+    "STFST31",
+    "STFST30",
+    "STFST32",
+    "STFTL30",
+    "STFTR30",
+    "STFOUCH3",
+    "STFEVL3",
+    "STFKILL3",
+    "STFST41",
+    "STFST40",
+    "STFST42",
+    "STFTL40",
+    "STFTR40",
+    "STFOUCH4",
+    "STFEVL4",
+    "STFKILL4",
+    "STFGOD0",
+    "STFDEAD0",
+};
+
+static std::unordered_map<
+    std::string,
+    std::vector<std::pair<std::string, glm::vec2>>> menuscreens
+{
+    {   "", {}},
+    {   "paused",
+        {
+            {"M_DOOM"  , glm::vec2{0, 50}},
+            {"M_NGAME" , glm::vec2{0, 105}},
+            {"M_OPTION", glm::vec2{0, 122}},
+            {"M_LOADG" , glm::vec2{0, 139}},
+            {"M_SAVEG" , glm::vec2{0, 156}},
+            {"M_QUITG" , glm::vec2{0, 174}},
+        }
+    },
+};
+static std::string current_menuscreen = "";
+
+static std::vector<std::pair<std::string, glm::vec2>> guidef
+{
+    /* status bar */
+    {"STBAR"   , glm::vec2{   0, 224}},
+    /* bullets */
+    {"STYSNUM0", glm::vec2{ 117, 216}},
+    {"STYSNUM5", glm::vec2{ 121, 216}},
+    {"STYSNUM0", glm::vec2{ 125, 216}},
+    {"STYSNUM2", glm::vec2{ 143, 216}},
+    {"STYSNUM0", glm::vec2{ 147, 216}},
+    {"STYSNUM0", glm::vec2{ 151, 216}},
+    /* shells */
+    {"STYSNUM0", glm::vec2{ 121, 222}},
+    {"STYSNUM0", glm::vec2{ 125, 222}},
+    {"STYSNUM5", glm::vec2{ 147, 222}},
+    {"STYSNUM0", glm::vec2{ 151, 222}},
+    /* rockets */
+    {"STYSNUM0", glm::vec2{ 121, 228}},
+    {"STYSNUM0", glm::vec2{ 125, 228}},
+    {"STYSNUM5", glm::vec2{ 147, 228}},
+    {"STYSNUM0", glm::vec2{ 151, 228}},
+    /* cells */
+    {"STYSNUM0", glm::vec2{ 117, 234}},
+    {"STYSNUM0", glm::vec2{ 121, 234}},
+    {"STYSNUM0", glm::vec2{ 125, 234}},
+    {"STYSNUM3", glm::vec2{ 143, 234}},
+    {"STYSNUM0", glm::vec2{ 147, 234}},
+    {"STYSNUM0", glm::vec2{ 151, 234}},
+    /* armor */
+    {"STTPRCNT", glm::vec2{  68, 219}},
+    {"STTNUM0" , glm::vec2{  26, 219}},
+    {"STTNUM0" , glm::vec2{  40, 219}},
+    {"STTNUM0" , glm::vec2{  54, 219}},
+    /* face */
+    {"STFST01" , glm::vec2{   0, 225}},
+    /* arms panel */
+    {"STARMS"  , glm::vec2{- 36, 224}},
+    {"STYSNUM2", glm::vec2{- 47, 215}},
+    {"STGNUM3" , glm::vec2{- 35, 215}},
+    {"STGNUM4" , glm::vec2{- 23, 215}},
+    {"STGNUM5" , glm::vec2{- 47, 225}},
+    {"STGNUM6" , glm::vec2{- 35, 225}},
+    {"STGNUM7" , glm::vec2{- 23, 225}},
+    /* health */
+    {"STTPRCNT", glm::vec2{- 63, 219}},
+    {"STTNUM1" , glm::vec2{-105, 219}},
+    {"STTNUM0" , glm::vec2{- 91, 219}},
+    {"STTNUM0" , glm::vec2{- 77, 219}},
+    /* current ammo */
+    {"STTNUM6" , glm::vec2{-151, 219}},
+    {"STTNUM6" , glm::vec2{-137, 219}},
+    {"STTNUM6" , glm::vec2{-123, 219}},
+};
+
+static std::vector<std::string> const hands
+{
+    "PUN",
+    "SAW",
+    "PIS",
+    "SHT",
+    "CHG",
+    "MIS",
+    "PLS",
+    "BFG",
+};
 
 
 
@@ -190,7 +523,6 @@ int main(int argc, char *argv[])
                 + std::to_string(episode)
                 + "M"
                 + std::to_string(mission)),
-            wadfile,
             wad);
     }
     catch (std::runtime_error &e)
@@ -198,7 +530,6 @@ int main(int argc, char *argv[])
         episode = 0;
         level = readlevel(
             "MAP" + std::to_string(episode) + std::to_string(mission),
-            wadfile,
             wad);
     }
 
@@ -207,9 +538,22 @@ int main(int argc, char *argv[])
     g.width  = 320;
     g.height = 240;
 
+    Player doomguy{};
+    doomguy.bullets = 50;
+    doomguy.shells  = 0;
+    doomguy.rockets = 0;
+    doomguy.cells   = 0;
+    doomguy.max_bullets = 200;
+    doomguy.max_shells  = 50;
+    doomguy.max_rockets = 50;
+    doomguy.max_cells   = 300;
+    doomguy.health = 100;
+    doomguy.armor  = 0;
+    doomguy.weapon = Weapon::Pistol;
+
 
     /* setup SDL stuff */
-    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER);
+    SDL_Init(SDL_INIT_VIDEO);
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
@@ -219,17 +563,46 @@ int main(int argc, char *argv[])
         SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
         g.width, g.height,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+    if (win == nullptr)
+    {
+        fprintf(stderr, "failed to create window -- %s\n",
+            SDL_GetError());
+        exit(EXIT_FAILURE);
+    }
     SDL_GLContext context = SDL_GL_CreateContext(win);
+    if (context == nullptr)
+    {
+        fprintf(stderr, "failed to create context -- %s\n",
+            SDL_GetError());
+        exit(EXIT_FAILURE);
+    }
 
     SDL_SetRelativeMouseMode(SDL_TRUE);
     if (SDL_GL_SetSwapInterval(-1) == -1)
     {
+        puts("VSync");
         SDL_GL_SetSwapInterval(1);
     }
+    else
+    {
+        puts("Adaptive VSync");
+    }
+
+    int versionmajor = 0,
+        versionminor = 0;
+    SDL_GL_GetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, &versionmajor);
+    SDL_GL_GetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, &versionminor);
+    printf("OpenGL v%d.%d\n", versionmajor, versionminor);
 
 
     /* init OpenGL stuff */
-    glewInit();
+    GLenum err = glewInit();
+    if (err != GLEW_OK)
+    {
+        fprintf(stderr, "glewInit() -- %s\n",
+            glewGetErrorString(err));
+        exit(EXIT_FAILURE);
+    }
 
     glViewport(0, 0, g.width, g.height);
     glEnable(GL_DEPTH_TEST);
@@ -259,12 +632,84 @@ int main(int argc, char *argv[])
         Shader{GL_FRAGMENT_SHADER, "shaders/fragment.glfs"}});
 
 
+    /* screen quad + shader */
+    Mesh screenquad{
+        {   {-1, -1, 0,  0, 0},
+            {-1,  1, 0,  0, 1},
+            { 1, -1, 0,  1, 0},
+            { 1,  1, 0,  1, 1}},
+        {2, 1, 0,  2, 3, 1}};
+    Program screenprog{
+        Shader{GL_VERTEX_SHADER, "shaders/screen.glvs"},
+        Shader{GL_FRAGMENT_SHADER, "shaders/screen.glfs"}};
+
+
+    /* GUI quad + shader */
+    Mesh guiquad{
+        {   {-1, -1, 0,  0, 1},
+            {-1,  1, 0,  0, 0},
+            { 1, -1, 0,  1, 1},
+            { 1,  1, 0,  1, 0}},
+        {2, 1, 0,  2, 3, 1}};
+    Program guiprog{
+        Shader{GL_VERTEX_SHADER, "shaders/gui.glvs"},
+        Shader{GL_FRAGMENT_SHADER, "shaders/fragment.glfs"}};
+
+    /* set up the screen framebuffer */
+    GLuint screenframebuffer = 0;
+    GLuint screentexture = 0;
+    GLuint screendepthstencil = 0;
+    glGenFramebuffers(1, &screenframebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, screenframebuffer);
+
+    glGenTextures(1, &screentexture);
+    glBindTexture(GL_TEXTURE_2D, screentexture);
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGB,
+        g.width, g.height,
+        0,
+        GL_RGB,
+        GL_UNSIGNED_BYTE,
+        nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        screentexture,
+        0);
+
+    glGenRenderbuffers(1, &screendepthstencil);
+    glBindRenderbuffer(GL_RENDERBUFFER, screendepthstencil);
+    glRenderbufferStorage(
+        GL_RENDERBUFFER,
+        GL_DEPTH24_STENCIL8,
+        g.width, g.height);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    glFramebufferRenderbuffer(
+        GL_FRAMEBUFFER,
+        GL_DEPTH_STENCIL_ATTACHMENT,
+        GL_RENDERBUFFER,
+        screendepthstencil);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER)
+        != GL_FRAMEBUFFER_COMPLETE)
+    {
+        fputs("Failed to create screenframebuffer\n", stderr);
+        exit(EXIT_FAILURE);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+
     /* set up the palette */
     g.palette_number = 0;
     auto palette = new uint8_t[14][256][3];
     for (size_t i = 0; i < 14; ++i)
     {
-        auto &pal = level.wad->palettes[i];
+        auto &pal = wad.palettes[i];
         for (size_t j = 0; j < 256; ++j)
         {
             palette[i][j][0] = pal[(j * 3) + 0];
@@ -289,7 +734,7 @@ int main(int argc, char *argv[])
 
 
     /* make GLTextures from the textures */
-    for (auto &pair : level.wad->textures)
+    for (auto &pair : wad.textures)
     {
         auto &name = pair.first;
         auto &tex = pair.second;
@@ -308,21 +753,42 @@ int main(int argc, char *argv[])
     }
 
     /* make GLTextures from the flats */
-    for (auto &pair : level.wad->flats)
+    for (auto &pair : wad.flats)
     {
         auto &name = pair.first;
         auto &flat = pair.second;
 
-        auto *imgdata = new uint8_t[flat.size() * 2];
+        auto imgdata = new uint32_t[flat.size()];
         for (size_t i = 0; i < flat.size(); ++i)
         {
-            imgdata[(i * 2) + 0] = flat[i];
-            imgdata[(i * 2) + 1] = 0xFF;
+            imgdata[i] = 0xFF00 | flat[i];
         }
         g.flats.emplace(
             name,
             new GLTexture{64, 64, imgdata});
         delete[] imgdata;
+    }
+
+    /* make GLTextures from the sprites */
+    for (auto &pair : wad.sprites)
+    {
+        auto &name = pair.first;
+        auto &sprite = pair.second;
+        g.sprites.emplace(name, picture2gltexture(sprite));
+    }
+
+    /* load the GUI pictures */
+    for (auto &name : gui_lump_names)
+    {
+        auto picture = loadpicture(wad.findlump(name));
+        g.gui_images.emplace(name, picture2gltexture(picture));
+    }
+
+    /* load the menu pictures */
+    for (auto &name : menu_lump_names)
+    {
+        auto picture = loadpicture(wad.findlump(name));
+        g.menu_images.emplace(name, picture2gltexture(picture));
     }
 
 
@@ -363,6 +829,68 @@ int main(int argc, char *argv[])
                         glm::radians(fov),
                         (double)g.width / (double)g.height,
                         0.1, 10000.0);
+
+                    /* realloc the screen framebuffer */
+                    glDeleteRenderbuffers(1, &screendepthstencil);
+                    glDeleteTextures(1, &screentexture);
+                    glDeleteFramebuffers(1, &screenframebuffer);
+
+                    glGenFramebuffers(1, &screenframebuffer);
+                    glBindFramebuffer(
+                        GL_FRAMEBUFFER,
+                        screenframebuffer);
+
+                    glGenTextures(1, &screentexture);
+                    glBindTexture(GL_TEXTURE_2D, screentexture);
+                    glTexImage2D(
+                        GL_TEXTURE_2D,
+                        0,
+                        GL_RGB,
+                        g.width, g.height,
+                        0,
+                        GL_RGB,
+                        GL_UNSIGNED_BYTE,
+                        nullptr);
+                    glTexParameteri(
+                        GL_TEXTURE_2D,
+                        GL_TEXTURE_MIN_FILTER,
+                        GL_LINEAR);
+                    glTexParameteri(
+                        GL_TEXTURE_2D,
+                        GL_TEXTURE_MAG_FILTER,
+                        GL_LINEAR);
+                    glFramebufferTexture2D(
+                        GL_FRAMEBUFFER,
+                        GL_COLOR_ATTACHMENT0,
+                        GL_TEXTURE_2D,
+                        screentexture,
+                        0);
+
+                    glGenRenderbuffers(1, &screendepthstencil);
+                    glBindRenderbuffer(
+                        GL_RENDERBUFFER,
+                        screendepthstencil);
+                    glRenderbufferStorage(
+                        GL_RENDERBUFFER,
+                        GL_DEPTH24_STENCIL8,
+                        g.width, g.height);
+                    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+                    glFramebufferRenderbuffer(
+                        GL_FRAMEBUFFER,
+                        GL_DEPTH_STENCIL_ATTACHMENT,
+                        GL_RENDERBUFFER,
+                        screendepthstencil);
+
+                    if (glCheckFramebufferStatus(GL_FRAMEBUFFER)
+                        != GL_FRAMEBUFFER_COMPLETE)
+                    {
+                        fprintf(stderr,
+                            "Failed to realloc screenframebuffer"
+                            " (%dx%d)\n",
+                            g.width, g.height);
+                        exit(EXIT_FAILURE);
+                    }
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 }
                 break;
             case SDL_KEYUP:
@@ -371,10 +899,16 @@ int main(int argc, char *argv[])
                     if (paused)
                     {
                         SDL_SetRelativeMouseMode(SDL_TRUE);
+                        current_menuscreen = "";
                     }
                     else
                     {
                         SDL_SetRelativeMouseMode(SDL_FALSE);
+                        SDL_WarpMouseInWindow(
+                            NULL,
+                            g.width / 2,
+                            g.height / 2);
+                        current_menuscreen = "paused";
                     }
                     paused = !paused;
                     break;
@@ -391,6 +925,46 @@ int main(int argc, char *argv[])
                         -e.motion.yrel / 10.0);
                     break;
 
+                case SDL_MOUSEBUTTONDOWN:
+                    switch (doomguy.weapon)
+                    {
+                    case Weapon::Fist:
+                    case Weapon::Chainsaw:
+                        break;
+                    case Weapon::Pistol:
+                    case Weapon::Chaingun:
+                        if (doomguy.bullets > 0)
+                        {
+                            doomguy.bullets -= 1;
+                        }
+                        break;
+                    case Weapon::Shotgun:
+                        if (doomguy.shells > 0)
+                        {
+                            doomguy.shells -= 1;
+                        }
+                        break;
+                    case Weapon::RocketLauncher:
+                        if (doomguy.rockets > 0)
+                        {
+                            doomguy.rockets -= 1;
+                        }
+                        break;
+                    case Weapon::PlasmaRifle:
+                    case Weapon::BFG9000:
+                        if (doomguy.cells > 0)
+                        {
+                            doomguy.cells -= 1;
+                        }
+                        break;
+                    }
+                    break;
+
+                case SDL_MOUSEWHEEL:
+                    doomguy.weapon -= e.wheel.y;
+                    doomguy.weapon %= 8;
+                    break;
+
                 case SDL_KEYDOWN:
                     switch (e.key.keysym.sym)
                     {
@@ -405,6 +979,34 @@ int main(int argc, char *argv[])
                         break;
                     case SDLK_s:
                         delta.z = -10;
+                        break;
+                    case SDLK_1:
+                        if (doomguy.weapon == Weapon::Chainsaw)
+                        {
+                            doomguy.weapon = Weapon::Fist;
+                        }
+                        else
+                        {
+                            doomguy.weapon = Weapon::Chainsaw;
+                        }
+                        break;
+                    case SDLK_2:
+                        doomguy.weapon = Weapon::Pistol;
+                        break;
+                    case SDLK_3:
+                        doomguy.weapon = Weapon::Shotgun;
+                        break;
+                    case SDLK_4:
+                        doomguy.weapon = Weapon::Chaingun;
+                        break;
+                    case SDLK_5:
+                        doomguy.weapon = Weapon::RocketLauncher;
+                        break;
+                    case SDLK_6:
+                        doomguy.weapon = Weapon::PlasmaRifle;
+                        break;
+                    case SDLK_7:
+                        doomguy.weapon = Weapon::BFG9000;
                         break;
                     }
                     break;
@@ -432,10 +1034,6 @@ int main(int argc, char *argv[])
                                 episode = 1;
                             }
                         }
-                        for (auto &t : renderlevel.things)
-                        {
-                            delete t.sprite;
-                        }
                         try
                         {
                             level = readlevel(
@@ -443,7 +1041,6 @@ int main(int argc, char *argv[])
                                     + std::to_string(episode)
                                     + "M"
                                     + std::to_string(mission)),
-                                wadfile,
                                 wad);
                         }
                         catch (std::runtime_error &e)
@@ -452,7 +1049,6 @@ int main(int argc, char *argv[])
                                 (   "MAP"
                                     + std::to_string(episode)
                                     + std::to_string(mission)),
-                                wadfile,
                                 wad);
                         }
                         renderlevel = make_renderlevel(level, g);
@@ -491,32 +1087,243 @@ int main(int argc, char *argv[])
                     : ld.right)->sector->floor + 48;
         }
 
+        /* update the GUI numbers */
+        /* TODO: clean this up */
+        guidef[1].first = "STYSNUM" + std::string{(char)('0' + (doomguy.bullets / 100))};
+        guidef[2].first = "STYSNUM" + std::string{(char)('0' + ((doomguy.bullets / 10) % 10))};
+        guidef[3].first = "STYSNUM" + std::string{(char)('0' + (doomguy.bullets % 10))};
+        guidef[4].first = "STYSNUM" + std::string{(char)('0' + (doomguy.max_bullets / 100))};
+        guidef[5].first = "STYSNUM" + std::string{(char)('0' + ((doomguy.max_bullets / 10) % 10))};
+        guidef[6].first = "STYSNUM" + std::string{(char)('0' + (doomguy.max_bullets % 10))};
+
+        guidef[7].first = "STYSNUM" + std::string{(char)('0' + ((doomguy.shells / 10) % 10))};
+        guidef[8].first = "STYSNUM" + std::string{(char)('0' + (doomguy.shells % 10))};
+        guidef[9].first = "STYSNUM" + std::string{(char)('0' + ((doomguy.max_shells / 10) % 10))};
+        guidef[10].first = "STYSNUM" + std::string{(char)('0' + (doomguy.max_shells % 10))};
+
+        guidef[11].first = "STYSNUM" + std::string{(char)('0' + ((doomguy.rockets / 10) % 10))};
+        guidef[12].first = "STYSNUM" + std::string{(char)('0' + (doomguy.rockets % 10))};
+        guidef[13].first = "STYSNUM" + std::string{(char)('0' + ((doomguy.max_rockets / 10) % 10))};
+        guidef[14].first = "STYSNUM" + std::string{(char)('0' + (doomguy.max_rockets % 10))};
+
+        guidef[15].first = "STYSNUM" + std::string{(char)('0' + (doomguy.cells / 100))};
+        guidef[16].first = "STYSNUM" + std::string{(char)('0' + ((doomguy.cells / 10) % 10))};
+        guidef[17].first = "STYSNUM" + std::string{(char)('0' + (doomguy.cells % 10))};
+        guidef[18].first = "STYSNUM" + std::string{(char)('0' + (doomguy.max_cells / 100))};
+        guidef[19].first = "STYSNUM" + std::string{(char)('0' + ((doomguy.max_cells / 10) % 10))};
+        guidef[20].first = "STYSNUM" + std::string{(char)('0' + (doomguy.max_cells % 10))};
+
+        guidef[22].first = "STTNUM" + std::string{(char)('0' + (doomguy.armor / 100))};
+        guidef[23].first = "STTNUM" + std::string{(char)('0' + ((doomguy.armor / 10) % 10))};
+        guidef[24].first = "STTNUM" + std::string{(char)('0' + (doomguy.armor % 10))};
+
+        guidef[25].first = "STFST" + std::string{(char)('4' - (glm::min(100, doomguy.health) / 25))} + "1";
+
+        for (size_t i = 2; i <= 7; ++i)
+        {
+            guidef[27 + (i - 2)].first =\
+                (doomguy.weapon == i? "STYSNUM" : "STGNUM")
+                + std::string{(char)('0' + i)};
+        }
+
+        guidef[34].first = "STTNUM" + std::string{(char)('0' + (doomguy.health / 100))};
+        guidef[35].first = "STTNUM" + std::string{(char)('0' + ((doomguy.health / 10) % 10))};
+        guidef[36].first = "STTNUM" + std::string{(char)('0' + (doomguy.health % 10))};
+
+        int ammo = 666;
+        switch (doomguy.weapon)
+        {
+        case Weapon::Fist:
+        case Weapon::Chainsaw:
+            break;
+        case Weapon::Pistol:
+        case Weapon::Chaingun:
+            ammo = doomguy.bullets;
+            break;
+        case Weapon::Shotgun:
+            ammo = doomguy.shells;
+            break;
+        case Weapon::RocketLauncher:
+            ammo = doomguy.rockets;
+            break;
+        case Weapon::PlasmaRifle:
+        case Weapon::BFG9000:
+            ammo = doomguy.cells;
+            break;
+        }
+        guidef[37].first = "STTNUM" + std::string{(char)('0' + (ammo / 100))};
+        guidef[38].first = "STTNUM" + std::string{(char)('0' + ((ammo / 10) % 10))};
+        guidef[39].first = "STTNUM" + std::string{(char)('0' + (ammo % 10))};
+
+
+        /* render the scene into the screenquad texture */
+        glBindFramebuffer(GL_FRAMEBUFFER, screenframebuffer);
+        {
+            glEnable(GL_DEPTH_TEST);
+
+            glClearStencil(0);
+            glClearColor(0, 0, 0, 1);
+            glClear(
+                GL_COLOR_BUFFER_BIT
+                | GL_DEPTH_BUFFER_BIT
+                | GL_STENCIL_BUFFER_BIT);
+
+            g.program->use();
+            g.program->set("camera", g.cam.matrix());
+            g.program->set("projection", g.projection);
+            g.program->set("palettes", 0);
+            g.program->set("palette", g.palette_number);
+            g.program->set("tex", 1);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, g.palette_id);
+            glActiveTexture(GL_TEXTURE1);
+
+            draw_level(renderlevel, g);
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        g.program->use();
-        g.program->set("camera", g.cam.matrix());
-        g.program->set("projection", g.projection);
-        g.program->set("palettes", 0);
-        g.program->set("palette", g.palette_number);
-        g.program->set("tex", 1);
+        /* draw the screenquad */
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, screentexture);
+
+        screenprog.use();
+        screenprog.set("camera", glm::mat4(1));
+        screenprog.set("projection", glm::mat4(1));
+        screenprog.set("screen", (GLuint)0);
+        screenquad.bind();
+        glDrawElements(
+            GL_TRIANGLES,
+            screenquad.size(),
+            GL_UNSIGNED_INT,
+            0);
+
+        /* draw the weapon, GUI, and menu overlays */
+        glDisable(GL_DEPTH_TEST);
+
+        double aspect_h = 240.0;
+        double aspect_w = (g.width / (double)g.height) * aspect_h;
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, g.palette_id);
         glActiveTexture(GL_TEXTURE1);
 
-        draw_level(renderlevel, g);
+        guiprog.use();
+        guiprog.set("palettes", 0);
+        guiprog.set("palette", g.palette_number);
+        guiprog.set("tex", 1);
+        guiprog.set("xoffset", 0);
+        guiprog.set("yoffset", 0);
+        guiquad.bind();
+
+        /* draw the weapon sprite */
+        std::string sprname = hands[doomguy.weapon] + "GA0";
+        auto &img = g.sprites[sprname];
+        auto &spr = level.wad->sprites[sprname];
+
+        glm::vec2 offset = glm::vec2{
+            (-spr.left) + (spr.width / 2),
+            (-spr.top) + (spr.height / 2)};
+
+        double w = img->width / aspect_w;
+        double h = img->height / aspect_h;
+
+        offset.x = (offset.x / 160.0) - 1;
+        offset.y = ((offset.y / 83.5) * -1) + 1;
+
+        guiprog.set("position",
+            glm::scale(
+                glm::translate(
+                    glm::mat4{1},
+                    glm::vec3{offset, 0}),
+                glm::vec3{w, h, 1}));
+
+        img->bind();
+        glDrawElements(
+            GL_TRIANGLES,
+            guiquad.size(),
+            GL_UNSIGNED_INT,
+            0);
+
+        /* add the GUI overlay */
+        for (auto &imgpair : guidef)
+        {
+            auto &img = g.gui_images[imgpair.first];
+            glm::vec2 offset = imgpair.second;
+
+            double w = img->width / aspect_w;
+            double h = img->height / aspect_h;
+
+            offset.x /= aspect_w / 2;
+            offset.y = ((offset.y / 120.0) * -1) + 1;
+
+            guiprog.set("position",
+                glm::scale(
+                    glm::translate(
+                        glm::mat4{1},
+                        glm::vec3{offset, 0}),
+                    glm::vec3{w, h, 1}));
+
+            img->bind();
+            glDrawElements(
+                GL_TRIANGLES,
+                guiquad.size(),
+                GL_UNSIGNED_INT,
+                0);
+        }
+
+        /* add the menu overlay */
+        for (auto &imgpair : menuscreens[current_menuscreen])
+        {
+            auto &img = g.menu_images[imgpair.first];
+            glm::vec2 offset = imgpair.second;
+
+            double w = img->width / aspect_w;
+            double h = img->height / aspect_h;
+
+            offset.x /= 160.0;
+            offset.y = ((offset.y / 120.0) * -1) + 1;
+
+            guiprog.set("position",
+                glm::scale(
+                    glm::translate(
+                        glm::mat4{1},
+                        glm::vec3{offset, 0}),
+                    glm::vec3{w, h, 1}));
+
+            img->bind();
+            glDrawElements(
+                GL_TRIANGLES,
+                guiquad.size(),
+                GL_UNSIGNED_INT,
+                0);
+        }
+        glEnable(GL_DEPTH_TEST);
 
         SDL_GL_SwapWindow(win);
         SDL_Delay(1000 / 60);
     }
 
+    auto &exittext = wad.findlump("ENDOOM");
+    for (size_t y = 0; y < 25; ++y)
+    {
+        for (size_t x = 0; x < 80; ++x)
+        {
+            putchar(exittext.data.get()[(y * 160) + (x * 2)]);
+        }
+        putchar('\n');
+    }
+
 
     /* cleanup */
-    for (auto &t : renderlevel.things)
-    {
-        delete t.sprite;
-    }
+    glDeleteRenderbuffers(1, &screendepthstencil);
+    glDeleteTextures(1, &screentexture);
+    glDeleteFramebuffers(1, &screenframebuffer);
+
     SDL_GL_DeleteContext(context);
     SDL_DestroyWindow(win);
     SDL_Quit();
@@ -526,6 +1333,18 @@ int main(int argc, char *argv[])
 }
 
 
+
+GLTexture *picture2gltexture(Picture const &p)
+{
+    auto data = new uint32_t[p.data.size()];
+    for (size_t i = 0; i < p.data.size(); ++i)
+    {
+        data[i] = ((p.opaque[i]? 0xFF : 0) << 8) | p.data[i];
+    }
+    auto gltexture = new GLTexture{p.width, p.height, data};
+    delete[] data;
+    return gltexture;
+}
 
 RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
 {
@@ -538,34 +1357,37 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
         if (thing.options & SKILL12)
         {
             auto &data = thingdata[thing.type];
-            Picture const *spr = nullptr;
+            std::string sprname = "";
             switch (data.frames)
             {
             case -1:
                 /* no image */
                 break;
             case 0:
-                spr = &lvl.wad->sprites[data.sprite + "A1"];
+                sprname = data.sprite + "A1";
                 break;
             default:
                 if (data.frames > 0)
                 {
-                    spr = &lvl.wad->sprites[data.sprite + "A0"];
+                    sprname = data.sprite + "A0";
                 }
                 else
                 {
-                    spr = &lvl.wad->sprites[
+                    sprname =\
                         data.sprite
-                        + std::string(
-                            1, 'A' + (-data.frames - 2))
-                        + "0"];
+                        + std::string{
+                            1,
+                            (char)('A' + (-data.frames - 2))}
+                        + "0";
                 }
                 break;
             }
+            sprname = sprname;
 
             /* get the thing's y position
              * (ie. the floor height of the sector it's inside) */
             int ssector = -1;
+            double y = 0;
             try
             {
                 ssector = get_ssector(thing.x, thing.y, lvl);
@@ -573,8 +1395,6 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
             catch (std::runtime_error &e)
             {
             }
-
-            double y = 0;
             if (ssector != -1)
             {
                 auto &seg = lvl.segs[lvl.ssectors[ssector].start];
@@ -586,29 +1406,22 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
             }
 
             /* make the picture data */
-            if (spr != nullptr)
+            if (sprname != "")
             {
-                auto imgdata = new uint32_t[spr->data.size()];
-                for (size_t i = 0; i < spr->data.size(); ++i)
-                {
-                    imgdata[i] =\
-                        ((spr->opaque[i]? 0xFF : 0) << 8)
-                        | spr->data[i];
-                }
+                auto &spr = lvl.wad->sprites[sprname];
 
-                /* TODO: figure out the left/top offsets */
-                GLfloat w = spr->width,
-                        h = spr->height;
+                /* TODO: figure out the top offset */
+                GLfloat w = spr.width,
+                        h = spr.height;
                 out.things.emplace_back(
-                    new GLTexture{spr->width, spr->height, imgdata},
+                    g.sprites[sprname].get(),
                     new Mesh{{
-                        {0, 0, 0,  0, 1},
-                        {w, 0, 0,  1, 1},
-                        {w, h, 0,  1, 0},
-                        {0, h, 0,  0, 0}},
+                        {(GLfloat)-spr.left+0, 0, 0,  0, 1},
+                        {(GLfloat)-spr.left+w, 0, 0,  1, 1},
+                        {(GLfloat)-spr.left+w, h, 0,  1, 0},
+                        {(GLfloat)-spr.left+0, h, 0,  0, 0}},
                         {0,1,2, 2,3,0}},
                     glm::vec3(-thing.x, y, thing.y));
-                delete[] imgdata;
             }
             else
             {
@@ -870,123 +1683,24 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
         }
     }
 
-#if 0
-    /* create the floors/ceilings from ssectors */
-    for (auto &ssector : lvl.ssectors)
+    std::unordered_map<
+        SSector const *,
+        std::vector<Node const *>> ssnodes{};
+    for (auto &nd : lvl.nodes)
     {
-        std::vector<size_t> ordered{};
-        std::unordered_set<size_t> indices{};
-        for (size_t i = 0; i < ssector.count; ++i)
+        if (nd.right & 0x8000)
         {
-            indices.emplace(ssector.start + i);
+            ssnodes[&lvl.ssectors[nd.right & 0x7FFF]].push_back(&nd);
         }
-
-        size_t i = *indices.begin();
-        ordered.push_back(i);
-        indices.erase(i);
-        for (;;)
+        if (nd.left & 0x8000)
         {
-            bool found = false;
-
-            auto &ref_seg = lvl.segs[i];
-            auto &ref_ld = lvl.linedefs[ref_seg.linedef];
-
-            for (auto j : indices)
-            {
-                auto &seg = lvl.segs[j];
-                auto &ld = lvl.linedefs[seg.linedef];
-
-                int16_t ref_x = ref_ld.end->x,
-                        ref_y = ref_ld.end->y;
-                if (ref_seg.direction)
-                {
-                    ref_x = ref_ld.start->x;
-                    ref_y = ref_ld.start->y;
-                }
-                int16_t x = ld.start->x,
-                        y = ld.start->y;
-                if (seg.direction)
-                {
-                    x = ld.end->x;
-                    y = ld.end->y;
-                }
-
-                if (x == ref_x && y == ref_y)
-                {
-                    i = j;
-                    ordered.push_back(j);
-                    indices.erase(j);
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-            {
-                break;
-            }
+            ssnodes[&lvl.ssectors[nd.left & 0x7FFF]].push_back(&nd);
         }
-
-
-        std::vector<Mesh::Vertex> floor_verts{},
-                                  ceiling_verts{};
-
-        for (size_t i : ordered)
-        {
-            auto &seg = lvl.segs[i];
-            auto &ld = lvl.linedefs[seg.linedef];
-
-            if (seg.direction == 1)
-            {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wnarrowing"
-                floor_verts.push_back({
-                    -ld.end->x,
-                    ld.left->sector->floor,
-                    ld.end->y,
-                    ld.end->x / 64.0,
-                    ld.end->y / 64.0});
-                ceiling_verts.push_back({
-                    -ld.start->x,
-                    ld.left->sector->ceiling,
-                    ld.start->y,
-                    ld.start->x / 64.0,
-                    ld.start->y / 64.0});
-            }
-            else
-            {
-                floor_verts.push_back({
-                    -ld.start->x,
-                    ld.right->sector->floor,
-                    ld.start->y,
-                    ld.start->x / 64.0,
-                    ld.start->y / 64.0});
-                ceiling_verts.push_back({
-                    -ld.end->x,
-                    ld.right->sector->ceiling,
-                    ld.end->y,
-                    ld.end->x / 64.0,
-                    ld.end->y / 64.0});
-#pragma GCC diagnostic pop
-            }
-        }
-
-        auto &ld = lvl.linedefs[lvl.segs[ssector.start].linedef];
-
-        /* reverse the floor polygon so the 'front' face points up */
-        std::reverse(std::begin(floor_verts), std::end(floor_verts));
-
-        out.flats.emplace_back(
-            /* floor */
-            g.flats[ld.right->sector->floor_flat].get(),
-            new Mesh{floor_verts},
-            /* ceiling */
-            g.flats[ld.right->sector->ceiling_flat].get(),
-            new Mesh{ceiling_verts});
     }
-#endif
 
     return out;
 }
+
 
 
 void draw_level(RenderLevel const &lvl, RenderGlobals const &g)
@@ -994,38 +1708,6 @@ void draw_level(RenderLevel const &lvl, RenderGlobals const &g)
     /* draw the walls */
     draw_node(lvl.raw->nodes.size() - 1, lvl, g);
 
-#if 0
-    /* draw the flats */
-    for (auto &flat : lvl.flats)
-    {
-        /* floor */
-        glActiveTexture(GL_TEXTURE1);
-        flat.floortex->bind();
-        g.program->set("tex", 1);
-        g.program->set("xoffset", 0);
-        g.program->set("yoffset", 0);
-
-        flat.floormesh->bind();
-        glDrawElements(
-            GL_TRIANGLE_FAN,
-            flat.floormesh->size(),
-            GL_UNSIGNED_INT,
-            0);
-
-        /* ceiling */
-        flat.ceilingtex->bind();
-        g.program->set("tex", 1);
-        g.program->set("xoffset", 0);
-        g.program->set("yoffset", 0);
-
-        flat.ceilingmesh->bind();
-        glDrawElements(
-            GL_TRIANGLE_FAN,
-            flat.ceilingmesh->size(),
-            GL_UNSIGNED_INT,
-            0);
-    }
-#endif
 
     /* draw the things */
     g.billboard_shader->use();
@@ -1056,8 +1738,6 @@ void draw_level(RenderLevel const &lvl, RenderGlobals const &g)
                 0);
         }
     }
-
-
 }
 
 void draw_node(

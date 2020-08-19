@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include <array>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -259,7 +260,7 @@ struct Picture
      * from the top left of the screen, and width/height are
      * automatically scaled if the window is less than fullscreen
      */
-    uint16_t left, top;
+    int16_t left, top;
 
     std::vector<uint8_t> data;
     std::vector<bool> opaque;
@@ -270,8 +271,6 @@ struct Picture
 struct Level
 {
     class WAD /*const*/ *wad;
-
-    std::unordered_map<std::string, Flat> flats;
 
     std::vector<Thing> things;
     std::vector<Linedef> linedefs;
@@ -289,9 +288,16 @@ struct Level
 
 struct DirEntry
 {
-    uint32_t offset;
+private:
+    ssize_t idx = 0;
+
+public:
     uint32_t size;
     char name[9];
+    std::shared_ptr<uint8_t> data;
+
+    void read(void *ptr, size_t byte_count);
+    void seek(ssize_t offset, int whence);
 };
 
 class WAD
@@ -310,7 +316,7 @@ public:
     size_t lumpidx(std::string name, size_t start=0) const;
 
     /* get the lump itself */
-    DirEntry const &findlump(std::string name, size_t start=0) const;
+    DirEntry &findlump(std::string name, size_t start=0);
 };
 
 
