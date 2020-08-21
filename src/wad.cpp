@@ -14,11 +14,13 @@ void DirEntry::read(void *ptr, size_t byte_count)
 {
     if (idx >= size)
     {
-        throw std::out_of_range(
-            "DirEntry::read -- "
+        throw std::out_of_range{
+            "DirEntry(\""
+            + std::string{name}
+            + "\")::read -- "
             + std::to_string(idx)
             + "/"
-            + std::to_string(size));
+            + std::to_string(size)};
     }
     memcpy(ptr, data.get() + idx, byte_count);
     idx += byte_count;
@@ -38,7 +40,7 @@ void DirEntry::seek(ssize_t offset, int whence)
         idx = (size - 1) - offset;
         break;
     default:
-        throw std::runtime_error("bad 'whence' value");
+        throw std::runtime_error{"bad 'whence' value"};
         break;
     }
 }
@@ -54,8 +56,8 @@ size_t WAD::lumpidx(std::string name, size_t start) const
             return i;
         }
     }
-    throw std::runtime_error(
-        "Couldn't find a lump named '" + name + "'");
+    throw std::out_of_range{
+        "Couldn't find a lump named '" + name + "'"};
 }
 
 DirEntry &WAD::findlump(std::string name, size_t start)

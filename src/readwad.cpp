@@ -98,7 +98,7 @@ WAD readwad(FILE *f)
             tds.push_back(td);
         }
     }
-    catch (std::runtime_error &e)
+    catch (std::out_of_range &e)
     {
     }
     for (auto &td : tds)
@@ -116,7 +116,9 @@ WAD readwad(FILE *f)
         if (   strcmp(lump.name, "F1_START") == 0
             || strcmp(lump.name, "F1_END") == 0
             || strcmp(lump.name, "F2_START") == 0
-            || strcmp(lump.name, "F2_END") == 0)
+            || strcmp(lump.name, "F2_END") == 0
+            || strcmp(lump.name, "F3_START") == 0
+            || strcmp(lump.name, "F3_END") == 0)
         {
             continue;
         }
