@@ -9,7 +9,8 @@
 Camera::Camera()
 :   _forward{0, 0, 0},
     pos{0, 0, 0},
-    up{0, 0, 0}
+    up{0, 0, 0},
+    angle{0, 0}
 {
 }
 
@@ -34,6 +35,9 @@ void Camera::move(glm::vec3 vector)
 
 void Camera::rotate(double horizontal, double vertical)
 {
+    angle.x = fmod(angle.x + horizontal, 360.0);
+    angle.y = fmod(angle.y + vertical, 360.0);
+
     auto hmat = glm::rotate(
         glm::mat4{1},
         (float)glm::radians(horizontal),

@@ -44,6 +44,7 @@ public:
     void set(std::string var, glm::mat4 const &value) const;
     void set(std::string var, glm::vec4 const &value) const;
     void set(std::string var, glm::vec3 const &value) const;
+    void set(std::string var, glm::vec2 const &value) const;
     void set(std::string var, GLuint value) const;
 
 

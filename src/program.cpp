@@ -90,6 +90,14 @@ void Program::set(std::string var, glm::vec3 const &value) const
         glm::value_ptr(value));
 }
 
+void Program::set(std::string var, glm::vec2 const &value) const
+{
+    glUniform2fv(
+        glGetUniformLocation(id, var.c_str()),
+        1,
+        glm::value_ptr(value));
+}
+
 void Program::set(std::string var, GLuint value) const
 {
     glUniform1i(glGetUniformLocation(id, var.c_str()), value);

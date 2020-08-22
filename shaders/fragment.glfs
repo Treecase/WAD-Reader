@@ -10,15 +10,11 @@ uniform sampler2D palettes;
 uniform int palette;
 
 uniform usampler2D tex;
-uniform int xoffset;
-uniform int yoffset;
 
 
 void main()
 {
-    uvec4 tmp = texture(
-        tex,
-        vec2(texCoord.x + xoffset, texCoord.y + yoffset));
+    uvec4 tmp = texture(tex, texCoord);
 
     uint index = tmp.r;
     uint alpha = tmp.g;

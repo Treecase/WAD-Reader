@@ -54,9 +54,6 @@ struct Wall
     GLTexture *middletex;
     std::unique_ptr<Mesh> middlemesh;
 
-    GLTexture *middletex2;
-    std::unique_ptr<Mesh> middlemesh2;
-
     GLTexture *uppertex;
     std::unique_ptr<Mesh> uppermesh;
 
@@ -66,16 +63,12 @@ struct Wall
     Wall(
             GLTexture *middletex,
             Mesh *middlemesh,
-            GLTexture *middletex2=nullptr,
-            Mesh *middlemesh2=nullptr,
             GLTexture *uppertex=nullptr,
             Mesh *uppermesh=nullptr,
             GLTexture *lowertex=nullptr,
             Mesh *lowermesh=nullptr)
     :   middletex{middletex},
         middlemesh{middlemesh},
-        middletex2{middletex2},
-        middlemesh2{middlemesh2},
         uppertex{uppertex},
         uppermesh{uppermesh},
         lowertex{lowertex},
@@ -103,6 +96,7 @@ struct RenderGlobals
     Camera cam;
     std::unique_ptr<Program> program;
     std::unique_ptr<Program> billboard_shader;
+    std::unique_ptr<Program> automap_program;
     glm::mat4 projection;
 
     GLuint palette_id;
@@ -125,6 +119,7 @@ struct RenderLevel
     std::vector<RenderThing> things;
     std::vector<RenderFlat> floors;
     std::vector<RenderFlat> ceilings;
+    std::vector<std::unique_ptr<Mesh>> automap;
 };
 
 enum Weapon
@@ -161,6 +156,7 @@ struct GameState
 
     State state;
     bool menu_open;
+    bool automap_open;
 
     std::string current_menuscreen;
 
@@ -182,6 +178,7 @@ struct GameState
                     render_globals.height / 2);
                 break;
             case State::TitleScreen:
+                automap_open = false;
                 break;
             }
         }
@@ -195,6 +192,7 @@ struct GameState
                 break;
             case State::TitleScreen:
                 SDL_SetRelativeMouseMode(SDL_FALSE);
+                automap_open = false;
                 break;
             }
         }
@@ -220,6 +218,18 @@ struct GameState
 
 
 
+static unsigned long long frames_cumulative = 0;
+static size_t seconds_count = 0;
+static size_t frames_per_second = 0;
+Uint32 callback1hz(Uint32 interval, void *param)
+{
+    printf("%lufps\n", frames_per_second);
+    frames_cumulative += frames_per_second;
+    seconds_count++;
+    frames_per_second = 0;
+    return interval;
+}
+
 GLTexture *picture2gltexture(Picture const &pic);
 RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g);
 uint16_t get_ssector(int16_t x, int16_t y, Level const &lvl);
@@ -244,6 +254,7 @@ void render_menu(
     Program const &guiprog,
     GameState const &gs,
     RenderGlobals &g);
+void render_automap(RenderLevel const &lvl, RenderGlobals const &g);
 
 
 
@@ -586,6 +597,8 @@ static std::vector<std::string> const hands
     "BFG",  /* BFG 9000 */
 };
 
+static std::unique_ptr<Mesh> automap_cursor{nullptr};
+
 
 
 int main(int argc, char *argv[])
@@ -709,9 +722,9 @@ int main(int argc, char *argv[])
 
     /* setup the camera */
     g.cam = Camera{
-        glm::vec3(0, 0, 0),
-        glm::vec3(0, 0, 1),
-        glm::vec3(0, 1, 0)};
+        glm::vec3{0, 0, 0},
+        glm::vec3{0, 0, 1},
+        glm::vec3{0, 1, 0}};
 
     /* load projection matrix */
     double const fov = 60;
@@ -727,6 +740,9 @@ int main(int argc, char *argv[])
     g.billboard_shader.reset(new Program{
         Shader{GL_VERTEX_SHADER, "shaders/billboard.glvs"},
         Shader{GL_FRAGMENT_SHADER, "shaders/fragment.glfs"}});
+    g.automap_program.reset(new Program{
+        Shader{GL_VERTEX_SHADER, "shaders/2d-vertex.glvs"},
+        Shader{GL_FRAGMENT_SHADER, "shaders/color.glfs"}});
 
 
     /* screen quad + shader */
@@ -751,6 +767,16 @@ int main(int argc, char *argv[])
     Program guiprog{
         Shader{GL_VERTEX_SHADER, "shaders/gui.glvs"},
         Shader{GL_FRAGMENT_SHADER, "shaders/fragment.glfs"}};
+
+    automap_cursor.reset(
+        new Mesh{
+            { 0.00,+0.020,0, 0,0},
+            { 0.00,-0.020,0, 0,0},
+            { 0.00,+0.020,0, 0,0},
+            {-0.01,-0.005,0, 0,0},
+            { 0.00,+0.020,0, 0,0},
+            { 0.01,-0.005,0, 0,0},
+            });
 
     /* set up the screen framebuffer */
     GLuint screenframebuffer = 0;
@@ -918,7 +944,11 @@ int main(int argc, char *argv[])
     /* set up the level's render data */
     auto renderlevel = make_renderlevel(level, g);
 
-    glm::vec3 delta{0};
+    /* FPS timer */
+    auto timer1hz = SDL_AddTimer(1000, callback1hz, nullptr);
+
+    float const speed = 5;
+    bool delta[4] = {false,false,false,false};
     SDL_Event e;
     for (bool running = true; running; )
     {
@@ -1092,16 +1122,16 @@ int main(int argc, char *argv[])
                         switch (e.key.keysym.sym)
                         {
                         case SDLK_d:
-                            delta.x = +10;
+                            delta[0] = true;
                             break;
                         case SDLK_a:
-                            delta.x = -10;
+                            delta[1] = true;
                             break;
                         case SDLK_w:
-                            delta.z = +10;
+                            delta[2] = true;
                             break;
                         case SDLK_s:
-                            delta.z = -10;
+                            delta[3] = true;
                             break;
                         case SDLK_1:
                             if (doomguy.weapon == Weapon::Chainsaw)
@@ -1131,19 +1161,26 @@ int main(int argc, char *argv[])
                         case SDLK_7:
                             doomguy.weapon = Weapon::BFG9000;
                             break;
+                        case SDLK_TAB:
+                            gs.automap_open = !gs.automap_open;
+                            break;
                         }
                         break;
 
                     case SDL_KEYUP:
                         switch (e.key.keysym.sym)
                         {
-                        case SDLK_a:
                         case SDLK_d:
-                            delta.x = 0;
+                            delta[0] = false;
+                            break;
+                        case SDLK_a:
+                            delta[1] = false;
                             break;
                         case SDLK_w:
+                            delta[2] = false;
+                            break;
                         case SDLK_s:
-                            delta.z = 0;
+                            delta[3] = false;
                             break;
 
                         case SDLK_SPACE:
@@ -1204,10 +1241,17 @@ int main(int argc, char *argv[])
             }
         }
 
-        if (gs.state == State::InLevel)
+        /* update the game */
+        if (gs.state == State::InLevel && !gs.menu_open)
         {
-            /* update the game state */
-            g.cam.move(delta);
+            double dx = delta[0] - delta[1],
+                   dz = delta[2] - delta[3];
+            if (dx != 0 || dz != 0)
+            {
+                g.cam.move(
+                    speed
+                    * glm::normalize(glm::vec3{dx, 0, dz}));
+            }
             int ssector = -1;
             try
             {
@@ -1291,6 +1335,7 @@ int main(int argc, char *argv[])
             }
 
             /* face */
+            /* TODO: animation */
             guidef[29].first =\
                 "STFST"
                 + std::string{
@@ -1319,6 +1364,12 @@ int main(int argc, char *argv[])
             /* draw the first person view */
             glEnable(GL_DEPTH_TEST);
             render_level(renderlevel, g);
+            /* draw the automap */
+            glDisable(GL_DEPTH_TEST);
+            if (gs.automap_open)
+            {
+                render_automap(renderlevel, g);
+            }
             /* draw the HUD */
             glDisable(GL_DEPTH_TEST);
             render_hud(doomguy, wad, guiquad, guiprog, g);
@@ -1333,9 +1384,14 @@ int main(int argc, char *argv[])
 
             auto &img = g.menu_images["TITLEPIC"];
 
-            double const aspect_h = img->height;
-            double const aspect_w =\
-                (g.width / (double)g.height) * aspect_h;
+            double aspect_w = img->width;
+            double aspect_h = (g.height / (double)g.width) * aspect_w;
+            if (  g.height    / (double)g.width
+                < img->height / (double)img->width)
+            {
+                aspect_h = img->height;
+                aspect_w = (g.width / (double)g.height) * aspect_h;
+            }
 
             double const w = img->width / aspect_w;
             double const h = img->height / aspect_h;
@@ -1344,8 +1400,6 @@ int main(int argc, char *argv[])
             guiprog.set("palettes", 0);
             guiprog.set("palette", 0);
             guiprog.set("tex", 1);
-            guiprog.set("xoffset", 0);
-            guiprog.set("yoffset", 0);
             guiprog.set("position",
                 glm::scale(glm::mat4{1}, glm::vec3{w, h, 1}));
 
@@ -1368,8 +1422,8 @@ int main(int argc, char *argv[])
         glBindTexture(GL_TEXTURE_2D, screentexture);
 
         screenprog.use();
-        screenprog.set("camera", glm::mat4(1));
-        screenprog.set("projection", glm::mat4(1));
+        screenprog.set("camera", glm::mat4{1});
+        screenprog.set("projection", glm::mat4{1});
         screenprog.set("screen", (GLuint)0);
         screenquad.bind();
         glDrawElements(
@@ -1381,9 +1435,8 @@ int main(int argc, char *argv[])
         /* overlay the menu */
         render_menu(guiquad, guiprog, gs, g);
 
-
         SDL_GL_SwapWindow(win);
-        SDL_Delay(1000 / 60);
+        frames_per_second++;
     }
 
     auto &exittext = wad.findlump("ENDOOM");
@@ -1396,8 +1449,9 @@ int main(int argc, char *argv[])
         putchar('\n');
     }
 
-
     /* cleanup */
+    SDL_RemoveTimer(timer1hz);
+
     glDeleteRenderbuffers(1, &screendepthstencil);
     glDeleteTextures(1, &screentexture);
     glDeleteFramebuffers(1, &screenframebuffer);
@@ -1406,6 +1460,9 @@ int main(int argc, char *argv[])
     SDL_DestroyWindow(win);
     SDL_Quit();
     fclose(wadfile);
+
+    printf("Average FPS: %g\n",
+        (double)frames_cumulative / (double)seconds_count);
 
     return EXIT_SUCCESS;
 }
@@ -1435,6 +1492,7 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
         /* TODO: set thing options filter externally */
         if (thing.options & SKILL3 && !(thing.options & MP_ONLY))
         {
+            /* TODO: animated sprites */
             auto &data = thingdata[thing.type];
             std::string sprname = "";
             switch (data.frames)
@@ -1489,7 +1547,6 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
             {
                 auto &spr = lvl.wad->sprites[sprname];
 
-                /* TODO: figure out the top offset */
                 GLfloat w = spr.width,
                         h = spr.height;
                 out.things.emplace_back(
@@ -1500,156 +1557,108 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
                         {(GLfloat)-spr.left+w, h, 0,  1, 0},
                         {(GLfloat)-spr.left+0, h, 0,  0, 0}},
                         {0,1,2, 2,3,0}},
-                    glm::vec3(-thing.x, y, thing.y));
+                    glm::vec3{
+                        -thing.x,
+                        y + (spr.top - spr.height),
+                        thing.y});
             }
             else
             {
                 out.things.emplace_back(
                     nullptr,
                     nullptr,
-                    glm::vec3(-thing.x, y, thing.y));
+                    glm::vec3{-thing.x, y, thing.y});
             }
         }
     }
 
-    /* create Walls from the linedefs */
-    for (auto &ld : lvl.linedefs)
+    /* create Walls from the segs */
+    /* TODO: animated walls */
+    for (auto &seg : lvl.segs)
     {
+        auto &ld = lvl.linedefs[seg.linedef];
+        auto &side = seg.direction? ld.left : ld.right;
+        auto &opp  = seg.direction? ld.right : ld.left;
+
         out.walls.emplace_back(nullptr, nullptr);
 
+        /* middle */
+        if (!(ld.flags & TWOSIDED)
+            || side->middle != "-")
+        {
+            int top = side->sector->ceiling;
+            int bot = side->sector->floor;
+
+            std::string texname = tolowercase(side->middle);
+            auto &tex = g.textures[texname];
+            out.walls.back().middletex = tex.get();
+
+            double const tw = tex->width,
+                         th = tex->height;
+
+            double len =\
+                sqrt(
+                    pow(seg.end->x - seg.start->x, 2)
+                    + pow(seg.end->y - seg.start->y, 2))
+                / tw;
+            double hgt = abs(top - bot) / th;
+
+            bool unpegged = ld.flags & UNPEGGEDLOWER;
+            double sx = (seg.offset + side->x) / tw,
+                   sy = (side->y / th) + (unpegged? -hgt : 0);
+            double ex = sx + len,
+                   ey = sy + hgt;
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnarrowing"
+            out.walls.back().middlemesh.reset(new Mesh{
+                {
+                    {-seg.start->x,bot,seg.start->y,  sx,ey},
+                    {-seg.end->x  ,bot,seg.end->y  ,  ex,ey},
+                    {-seg.end->x  ,top,seg.end->y  ,  ex,sy},
+                    {-seg.start->x,top,seg.start->y,  sx,sy},
+                },
+                {0,1,2, 2,3,0}});
+#pragma GCC diagnostic pop
+        }
         if (ld.flags & TWOSIDED)
         {
-            /* middle (right side) */
-            if (ld.right->middle != "-")
-            {
-                int top = ld.right->sector->ceiling;
-                int bot = ld.right->sector->floor;
-
-                double len = sqrt(
-                    pow(ld.end->x - ld.start->x, 2)
-                    + pow(ld.end->y - ld.start->y, 2));
-                double hgt = abs(top - bot);
-
-                out.walls.emplace_back(nullptr, nullptr);
-
-                std::string texname = tolowercase(ld.right->middle);
-                if (texname != "-")
-                {
-                    out.walls.back().middletex =\
-                        g.textures[texname].get();
-                    len /= g.textures[texname]->width;
-                    hgt /= g.textures[texname]->height;
-
-                    bool unpegged = ld.flags & UNPEGGEDLOWER;
-                    double sx = 0,
-                           sy = unpegged? -hgt : 0;
-                    double ex = len,
-                           ey = unpegged? 0 : hgt;
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wnarrowing"
-                    out.walls.back().middlemesh.reset(new Mesh{
-                        {
-                            {-ld.start->x, bot, ld.start->y,  sx, ey},
-                            {-ld.end->x  , bot, ld.end->y  ,  ex, ey},
-                            {-ld.end->x  , top, ld.end->y  ,  ex, sy},
-                            {-ld.start->x, top, ld.start->y,  sx, sy},
-                        },
-                        {
-                            0, 1, 2,
-                            2, 3, 0
-                        }});
-                }
-#pragma GCC diagnostic pop
-            }
-            /* middle (left side) */
-            if (ld.left->middle != "-")
-            {
-                int top = ld.right->sector->ceiling;
-                int bot = ld.right->sector->floor;
-
-                double len = sqrt(
-                    pow(ld.end->x - ld.start->x, 2)
-                    + pow(ld.end->y - ld.start->y, 2));
-                double hgt = abs(top - bot);
-
-                out.walls.emplace_back(nullptr, nullptr);
-
-                std::string texname = tolowercase(ld.right->middle);
-                if (texname != "-")
-                {
-                    out.walls.back().middletex =\
-                        g.textures[texname].get();
-                    len /= g.textures[texname]->width;
-                    hgt /= g.textures[texname]->height;
-
-                    bool unpegged = ld.flags & UNPEGGEDLOWER;
-                    double sx = 0,
-                           sy = unpegged? -hgt : 0;
-                    double ex = len,
-                           ey = unpegged? 0 : hgt;
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wnarrowing"
-                    out.walls.back().middlemesh.reset(new Mesh{
-                        {
-                            {-ld.start->x, bot, ld.start->y,  sx, ey},
-                            {-ld.end->x  , bot, ld.end->y  ,  ex, ey},
-                            {-ld.end->x  , top, ld.end->y  ,  ex, sy},
-                            {-ld.start->x, top, ld.start->y,  sx, sy},
-                        },
-                        {
-                            2, 1, 0,
-                            0, 3, 2
-                        }});
-                }
-#pragma GCC diagnostic pop
-            }
             /* lower section */
-            if (ld.right->sector->floor != ld.left->sector->floor)
+            if (side->sector->floor < opp->sector->floor)
             {
-                bool right_is_top =\
-                    (   ld.right->sector->floor
-                        > ld.left->sector->floor);
+                int top = opp->sector->floor;
+                int bot = side->sector->floor;
 
-                int top =\
-                    (right_is_top?
-                        ld.right->sector->floor
-                        : ld.left->sector->floor);
-                int bot =\
-                    (right_is_top?
-                        ld.left->sector->floor
-                        : ld.right->sector->floor);
-
-                std::string texname = tolowercase(
-                    (right_is_top?
-                        ld.left
-                        : ld.right)->lower);
+                std::string texname = tolowercase(side->lower);
                 if (texname != "-")
                 {
-                    auto const tex = g.textures[texname].get();
-                    out.walls.back().lowertex = tex;
+                    auto &tex = g.textures[texname];
+                    out.walls.back().lowertex = tex.get();
+
+                    double const tw = tex->width,
+                                 th = tex->height;
+
                     double len =\
                         sqrt(
-                            pow(ld.end->x - ld.start->x, 2)
-                            + pow(ld.end->y - ld.start->y, 2))
-                        / (double)tex->width;
-                    double hgt = abs(top - bot) / (double)tex->height;
+                            pow(seg.end->x - seg.start->x, 2)
+                            + pow(seg.end->y - seg.start->y, 2))
+                        / tw;
+                    double hgt = abs(top - bot) / th;
 
                     bool unpegged = ld.flags & UNPEGGEDLOWER;
-                    double sx = 0,
-                           sy = 0;
-                    double ex = len,
-                           ey = hgt;
+                    double sx = (seg.offset + side->x) / tw,
+                           sy = side->y / th;
+                    double ex = sx + len,
+                           ey = sy + hgt;
 
                     if (unpegged)
                     {
                         double offset =\
                             (   glm::max(
-                                    ld.right->sector->ceiling,
-                                    ld.left->sector->ceiling)
+                                    side->sector->ceiling,
+                                    opp->sector->ceiling)
                                 - top)
-                            / (double)tex->height;
+                            / th;
                         sy += offset;
                         ey += offset;
                     }
@@ -1658,137 +1667,73 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
 #pragma GCC diagnostic ignored "-Wnarrowing"
                     out.walls.back().lowermesh.reset(new Mesh{
                         {
-                            {-ld.start->x, bot, ld.start->y,  sx, ey},
-                            {-ld.end->x,   bot, ld.end->y,    ex, ey},
-                            {-ld.end->x,   top, ld.end->y,    ex, sy},
-                            {-ld.start->x, top, ld.start->y,  sx, sy},
+                            {-seg.start->x,bot,seg.start->y, sx,ey},
+                            {-seg.end->x  ,bot,seg.end->y  , ex,ey},
+                            {-seg.end->x  ,top,seg.end->y  , ex,sy},
+                            {-seg.start->x,top,seg.start->y, sx,sy},
                         },
-                        {
-                            0, 1, 2,
-                            2, 3, 0,
-                        }});
+                        {0,1,2, 2,3,0}});
                 }
 #pragma GCC diagnostic pop
             }
             /* upper section */
-            if (ld.right->sector->ceiling != ld.left->sector->ceiling)
+            if (side->sector->ceiling > opp->sector->ceiling)
             {
-                bool right_is_top =\
-                    (   ld.right->sector->ceiling
-                        > ld.left->sector->ceiling);
+                int top = side->sector->ceiling;
+                int bot = opp->sector->ceiling;
 
-                int top =\
-                    (right_is_top?
-                        ld.right->sector->ceiling
-                        : ld.left->sector->ceiling);
-                int bot =\
-                    (right_is_top?
-                        ld.left->sector->ceiling
-                        : ld.right->sector->ceiling);
-
-                std::string texname = tolowercase(
-                    (right_is_top?
-                        ld.right
-                        : ld.left)->upper);
+                std::string texname = tolowercase(side->upper);
                 if (texname != "-")
                 {
-                    auto tex = g.textures[texname].get();
-                    out.walls.back().uppertex = tex;
+                    auto &tex = g.textures[texname];
+                    out.walls.back().uppertex = tex.get();
+
+                    double const tw = tex->width,
+                                 th = tex->height;
+
                     double len =\
                         sqrt(
-                            pow(ld.end->x - ld.start->x, 2)
-                            + pow(ld.end->y - ld.start->y, 2))
-                        / (double)tex->width;
-                    double hgt = abs(top - bot) / (double)tex->height;
+                            pow(seg.end->x - seg.start->x, 2)
+                            + pow(seg.end->y - seg.start->y, 2))
+                        / tw;
+                    double hgt = abs(top - bot) / th;
 
                     bool unpegged = ld.flags & UNPEGGEDUPPER;
-                    double sx = 0,
-                           sy = unpegged? 0 : -hgt;
-                    double ex = len,
-                           ey = unpegged? hgt : 0;
+                    double sx = (seg.offset + side->x) / tw,
+                           sy = (side->y / th) + (unpegged? 0 : -hgt);
+                    double ex = sx + len,
+                           ey = sy + hgt;
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnarrowing"
                     out.walls.back().uppermesh.reset(new Mesh{
                         {
-                            {-ld.start->x, bot, ld.start->y,  sx, ey},
-                            {-ld.end->x,   bot, ld.end->y,    ex, ey},
-                            {-ld.end->x,   top, ld.end->y,    ex, sy},
-                            {-ld.start->x, top, ld.start->y,  sx, sy},
+                            {-seg.start->x,bot,seg.start->y, sx,ey},
+                            {-seg.end->x  ,bot,seg.end->y  , ex,ey},
+                            {-seg.end->x  ,top,seg.end->y  , ex,sy},
+                            {-seg.start->x,top,seg.start->y, sx,sy},
                         },
-                        {
-                            0, 1, 2,
-                            2, 3, 0,
-                        }});
+                        {0,1,2, 2,3,0}});
                 }
 #pragma GCC diagnostic pop
             }
         }
-        else
-        {
-            int top = ld.right->sector->ceiling;
-            int bot = ld.right->sector->floor;
-
-            double len = sqrt(
-                pow(ld.end->x - ld.start->x, 2)
-                + pow(ld.end->y - ld.start->y, 2));
-            double hgt = abs(top - bot);
-
-            std::string texname = tolowercase(ld.right->middle);
-            out.walls.back().middletex = g.textures[texname].get();
-            len /= g.textures[texname]->width;
-            hgt /= g.textures[texname]->height;
-
-            bool unpegged = ld.flags & UNPEGGEDLOWER;
-            double sx = 0,
-                   sy = unpegged? -hgt : 0;
-            double ex = len,
-                   ey = unpegged? 0 : hgt;
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wnarrowing"
-            out.walls.back().middlemesh.reset(new Mesh{
-                {
-                    {-ld.start->x, bot, ld.start->y,  sx, ey},
-                    {-ld.end->x  , bot, ld.end->y  ,  ex, ey},
-                    {-ld.end->x  , top, ld.end->y  ,  ex, sy},
-                    {-ld.start->x, top, ld.start->y,  sx, sy},
-                },
-                {
-                    0, 1, 2,
-                    2, 3, 0
-                }});
-#pragma GCC diagnostic pop
-        }
     }
 
-    std::unordered_map<
-        SSector const *,
-        std::vector<Node const *>> ssnodes{};
-    for (auto &nd : lvl.nodes)
+    /* create the automap lines */
+    for (auto &ld : lvl.linedefs)
     {
-        if (nd.right & 0x8000)
-        {
-            ssnodes[&lvl.ssectors[nd.right & 0x7FFF]].push_back(&nd);
-        }
-        if (nd.left & 0x8000)
-        {
-            ssnodes[&lvl.ssectors[nd.left & 0x7FFF]].push_back(&nd);
-        }
+        out.automap.emplace_back(
+            new Mesh{
+                {-ld.start->x,ld.start->y,0, 0,0},
+                {-ld.end->x  ,ld.end->y  ,0, 0,0}});
     }
 
     return out;
 }
 
-uint16_t _get_ssector_interior(
-    int16_t x,
-    int16_t y,
-    Level const &lvl,
-    uint16_t node)
+bool _check_node_side(int16_t x, int16_t y, Node const &n)
 {
-    auto &n = lvl.nodes[node];
-    uint16_t number = 0;
-
     double part_angle = atan2((double)n.dy, (double)n.dx);
     double xy_angle = atan2(
         (double)y - (double)n.y,
@@ -1804,20 +1749,19 @@ uint16_t _get_ssector_interior(
     {
         right = (xy_angle < part_angle);
     }
+    return right;
+}
 
-    int16_t lower_x = right? n.right_lower_x : n.left_lower_x,
-            upper_x = right? n.right_upper_x : n.left_upper_x,
-            lower_y = right? n.right_lower_y : n.left_lower_y,
-            upper_y = right? n.right_upper_y : n.left_upper_y;
+uint16_t _get_ssector_interior(
+    int16_t x,
+    int16_t y,
+    Level const &lvl,
+    uint16_t node)
+{
+    auto &n = lvl.nodes[node];
 
-    if (lower_x <= x && x <= upper_x && lower_y <= y && y <= upper_y)
-    {
-        number = right? n.right : n.left;
-    }
-    else
-    {
-        throw std::runtime_error("out of bounds");
-    }
+    bool right = _check_node_side(x, y, n);
+    uint16_t number = right? n.right : n.left;
 
     if (number & 0x8000)
     {
@@ -1849,8 +1793,6 @@ void render_level(RenderLevel const &lvl, RenderGlobals const &g)
     g.billboard_shader->set("palettes", 0);
     g.billboard_shader->set("palette", g.palette_number);
     g.billboard_shader->set("tex", 1);
-    g.billboard_shader->set("xoffset", 0);
-    g.billboard_shader->set("yoffset", 0);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, g.palette_id);
@@ -1861,7 +1803,7 @@ void render_level(RenderLevel const &lvl, RenderGlobals const &g)
         {
             t.sprite->bind();
             g.billboard_shader->set("model",
-                glm::translate(glm::mat4(1), t.pos));
+                glm::translate(glm::mat4{1}, t.pos));
 
             t.mesh->bind();
             glDrawElements(
@@ -1879,21 +1821,30 @@ void render_node(
     RenderGlobals const &g)
 {
     Node const &node = lvl.raw->nodes[index];
-    if (node.right & 0x8000)
+
+    /* TODO: the node side check drops the framerate a bit,
+     *  it might be faster than always doing the right side first
+     *  if I precompute it each frame? */
+    //bool right = _check_node_side(g.cam.pos.x, g.cam.pos.z, node);
+    bool right = true;
+    uint16_t first  = right? node.right : node.left;
+    uint16_t second = right? node.left  : node.right;
+
+    if (first & 0x8000)
     {
-        render_ssector(node.right & 0x7FFF, lvl, g);
+        render_ssector(first & 0x7FFF, lvl, g);
     }
     else
     {
-        render_node(node.right, lvl, g);
+        render_node(first, lvl, g);
     }
-    if (node.left & 0x8000)
+    if (second & 0x8000)
     {
-        render_ssector(node.left & 0x7FFF, lvl, g);
+        render_ssector(second & 0x7FFF, lvl, g);
     }
     else
     {
-        render_node(node.left, lvl, g);
+        render_node(second, lvl, g);
     }
 }
 
@@ -1917,16 +1868,10 @@ void render_ssector(
 
     for (size_t i = 0; i < ssector.count; ++i)
     {
-        auto &seg = lvl.raw->segs[ssector.start + i];
-        auto &wall = lvl.walls[seg.linedef];
+        auto &wall = lvl.walls[ssector.start + i];
 
         if (wall.uppermesh != nullptr)
         {
-            g.program->set("xoffset",
-                lvl.raw->linedefs[seg.linedef].right->x);
-            g.program->set("yoffset",
-                lvl.raw->linedefs[seg.linedef].right->y);
-
             if (wall.uppertex != nullptr)
             {
                 wall.uppertex->bind();
@@ -1935,7 +1880,6 @@ void render_ssector(
             {
                 glBindTexture(GL_TEXTURE_2D, 0);
             }
-
             wall.uppermesh->bind();
             glDrawElements(
                 GL_TRIANGLES,
@@ -1953,29 +1897,10 @@ void render_ssector(
             {
                 glBindTexture(GL_TEXTURE_2D, 0);
             }
-
             wall.middlemesh->bind();
             glDrawElements(
                 GL_TRIANGLES,
                 wall.middlemesh->size(),
-                GL_UNSIGNED_INT,
-                0);
-        }
-        if (wall.middlemesh2 != nullptr)
-        {
-            if (wall.middletex2 != nullptr)
-            {
-                wall.middletex2->bind();
-            }
-            else
-            {
-                glBindTexture(GL_TEXTURE_2D, 0);
-            }
-
-            wall.middlemesh2->bind();
-            glDrawElements(
-                GL_TRIANGLES,
-                wall.middlemesh2->size(),
                 GL_UNSIGNED_INT,
                 0);
         }
@@ -1989,7 +1914,6 @@ void render_ssector(
             {
                 glBindTexture(GL_TEXTURE_2D, 0);
             }
-
             wall.lowermesh->bind();
             glDrawElements(
                 GL_TRIANGLES,
@@ -2015,14 +1939,13 @@ void render_hud(
     guiprog.set("palettes", 0);
     guiprog.set("palette", 0);
     guiprog.set("tex", 1);
-    guiprog.set("xoffset", 0);
-    guiprog.set("yoffset", 0);
     guiquad.bind();
 
     double const aspect_h = 240.0;
     double const aspect_w = (g.width / (double)g.height) * aspect_h;
 
     /* weapon sprite */
+    /* TODO: animations */
     std::string const sprname = hands[doomguy.weapon] + "GA0";
     auto &img = g.sprites[sprname];
     auto &spr = wad.sprites[sprname];
@@ -2094,8 +2017,6 @@ void render_menu(
     guiprog.set("palettes", 0);
     guiprog.set("palette", 0);
     guiprog.set("tex", 1);
-    guiprog.set("xoffset", 0);
-    guiprog.set("yoffset", 0);
     guiquad.bind();
 
     double const aspect_h = 240.0;
@@ -2125,5 +2046,69 @@ void render_menu(
             GL_UNSIGNED_INT,
             0);
     }
+}
+
+void render_automap(RenderLevel const &lvl, RenderGlobals const &g)
+{
+    g.automap_program->use();
+    g.automap_program->set("transform",
+        glm::translate(
+            glm::rotate(
+                glm::scale(
+                    glm::mat4{1},
+                    glm::vec3{-1.0 / g.width, 1.0 / g.height, 1}),
+                glm::radians(g.cam.angle.x),
+                glm::vec3{0, 0, 1}),
+            glm::vec3{-g.cam.pos.x, -g.cam.pos.z, 0}));
+
+    for (size_t i = 0; i < lvl.automap.size(); ++i)
+    {
+        auto &mesh = lvl.automap[i];
+        auto &ld = lvl.raw->linedefs[i];
+
+        glm::vec4 color{0.0, 1.0, 0.0, 1.0};
+        if (ld.flags & TWOSIDED)
+        {
+            if (!(ld.flags & SECRET))
+            {
+                color.x = 0;
+                color.y = 0.5;
+                color.z = 0;
+            }
+            else
+            {
+                color.x = 1.0;
+                color.y = 1.0;
+                color.z = 0;
+            }
+        }
+        if (ld.flags & UNMAPPED)
+        {
+                color.w = 0.0;
+        }
+        if (ld.flags & PREMAPPED)
+        {
+                color.x = 0.0;
+                color.y = 1.0;
+                color.z = 1.0;
+        }
+        g.automap_program->set("color", color);
+
+        mesh->bind();
+        glDrawElements(
+            GL_LINES,
+            mesh->size(),
+            GL_UNSIGNED_INT,
+            0);
+    }
+
+    g.automap_program->set("transform", glm::mat4{1});
+    g.automap_program->set("color", glm::vec4{1.0, 0.0, 0.0, 1.0});
+    automap_cursor->bind();
+    glDrawElements(
+        GL_LINES,
+        automap_cursor->size(),
+        GL_UNSIGNED_INT,
+        0);
 }
 

@@ -32,7 +32,7 @@ typedef char *Reject;
 
 struct PatchDescriptor
 {
-    uint16_t x, y;
+    int16_t x, y;
     uint16_t pname_index;
 };
 
@@ -294,7 +294,7 @@ private:
 public:
     uint32_t size;
     char name[9];
-    std::shared_ptr<uint8_t> data;
+    std::shared_ptr<uint8_t[]> data;
 
     void read(void *ptr, size_t byte_count);
     void seek(ssize_t offset, int whence);
