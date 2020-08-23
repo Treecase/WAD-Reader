@@ -34,19 +34,24 @@
 
 struct RenderThing
 {
-    GLTexture *sprite;
-    std::unique_ptr<Mesh> mesh;
-    glm::vec3 pos;
-
-    RenderThing(
-        GLTexture *sprite,
-        Mesh *mesh,
-        glm::vec3 pos)
-    :   sprite{sprite},
-        mesh{mesh},
-        pos{pos}
+    struct SpriteDef
     {
-    }
+        GLTexture *tex;
+        bool flipx;
+        glm::vec2 offset;
+    };
+
+    bool angled;
+    bool cleanloop;
+    bool reverse_anim;
+    int framecount;
+    int frame_idx;
+
+    std::unordered_map<std::string, SpriteDef> sprites;
+
+    Sector *sector;
+    glm::vec3 pos;
+    double angle;
 };
 
 struct Wall
@@ -99,8 +104,10 @@ struct RenderGlobals
     std::unique_ptr<Program> automap_program;
     glm::mat4 projection;
 
-    GLuint palette_id;
+    GLuint palette_texture;
     GLuint palette_number;
+
+    GLuint colormap_texture;
 
     std::unordered_map<
         std::string,
@@ -142,6 +149,10 @@ struct Player
     int cells, max_cells;
     int health, armor;
     unsigned int weapon;
+
+    std::vector<size_t> glance;
+    size_t glance_idx;
+    size_t glancecounter;
 };
 
 enum class State
@@ -157,6 +168,7 @@ struct GameState
     State state;
     bool menu_open;
     bool automap_open;
+    Uint64 last_update;
 
     std::string current_menuscreen;
 
@@ -189,6 +201,7 @@ struct GameState
             {
             case State::InLevel:
                 SDL_SetRelativeMouseMode(SDL_TRUE);
+                last_update = SDL_GetPerformanceCounter();
                 break;
             case State::TitleScreen:
                 SDL_SetRelativeMouseMode(SDL_FALSE);
@@ -227,6 +240,21 @@ Uint32 callback1hz(Uint32 interval, void *param)
     frames_cumulative += frames_per_second;
     seconds_count++;
     frames_per_second = 0;
+    return interval;
+}
+
+Uint32 callback35hz(Uint32 interval, void *param)
+{
+    static size_t updatecount = 0;
+    updatecount++;
+    if (updatecount >= 7)
+    {
+        SDL_Event e;
+        e.type = SDL_USEREVENT;
+        e.user.code = 0;
+        SDL_PushEvent(&e);
+        updatecount = 0;
+    }
     return interval;
 }
 
@@ -598,6 +626,7 @@ static std::vector<std::string> const hands
 };
 
 static std::unique_ptr<Mesh> automap_cursor{nullptr};
+static std::unique_ptr<Mesh> thingquad{nullptr};
 
 
 
@@ -609,21 +638,42 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    char const *filename = argv[1];
-
-    FILE *wadfile = fopen(filename, "r");
+    FILE *wadfile = fopen(argv[1], "r");
     if (wadfile == nullptr)
     {
         fprintf(stderr, "Failed to open %s -- (%s)\n",
-            filename,
+            argv[1],
             strerror(errno));
         exit(EXIT_FAILURE);
     }
 
+    /* read the IWAD */
+    auto wad = loadIWAD(wadfile);
+    fclose(wadfile);
+
+    /* read PWADs and patch the IWAD */
+    if (argc >= 3)
+    {
+        for (int i = 0; i < argc - 2; ++i)
+        {
+            FILE *f = fopen(argv[2 + i], "r");
+            if (f == nullptr)
+            {
+                fprintf(stderr, "Failed to open %s -- (%s)\n",
+                    argv[2 + i],
+                    strerror(errno));
+                exit(EXIT_FAILURE);
+            }
+            patchWAD(wad, f);
+            fclose(f);
+        }
+    }
+    readwad(wad);
+
+    /* load the first level */
     int episode = 1,
         mission = 1;
 
-    auto wad = readwad(wadfile);
     Level level{};
     try
     {
@@ -659,6 +709,10 @@ int main(int argc, char *argv[])
     doomguy.health = 100;
     doomguy.armor  = 0;
     doomguy.weapon = Weapon::Pistol;
+
+    doomguy.glance = {1,0,1,2};
+    doomguy.glance_idx = 0;
+    doomguy.glancecounter = 0;
 
 
     /* setup SDL stuff */
@@ -768,6 +822,7 @@ int main(int argc, char *argv[])
         Shader{GL_VERTEX_SHADER, "shaders/gui.glvs"},
         Shader{GL_FRAGMENT_SHADER, "shaders/fragment.glfs"}};
 
+    /* mesh for the automap cursor */
     automap_cursor.reset(
         new Mesh{
             { 0.00,+0.020,0, 0,0},
@@ -775,8 +830,18 @@ int main(int argc, char *argv[])
             { 0.00,+0.020,0, 0,0},
             {-0.01,-0.005,0, 0,0},
             { 0.00,+0.020,0, 0,0},
-            { 0.01,-0.005,0, 0,0},
-            });
+            { 0.01,-0.005,0, 0,0}});
+
+    /* quad used for rendering Things */
+    thingquad.reset(
+        new Mesh{
+            {
+                {-0.5,0,0, 0,1},
+                {-0.5,1,0, 0,0},
+                { 0.5,0,0, 1,1},
+                { 0.5,1,0, 1,0},
+            },
+            {0,2,1, 1,2,3}});
 
     /* set up the screen framebuffer */
     GLuint screenframebuffer = 0;
@@ -840,8 +905,8 @@ int main(int argc, char *argv[])
             palette[i][j][2] = pal[(j * 3) + 2];
         }
     }
-    glGenTextures(1, &g.palette_id);
-    glBindTexture(GL_TEXTURE_2D, g.palette_id);
+    glGenTextures(1, &g.palette_texture);
+    glBindTexture(GL_TEXTURE_2D, g.palette_texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexImage2D(
@@ -854,6 +919,28 @@ int main(int argc, char *argv[])
         GL_UNSIGNED_BYTE,
         palette);
     delete[] palette;
+
+
+    /* set up the colormap */
+    auto colormap = new uint8_t[256 * 34];
+    auto &dir = wad.findlump("COLORMAP");
+    dir.seek(0, SEEK_SET);
+    dir.read(colormap, 256 * 34);
+
+    glGenTextures(1, &g.colormap_texture);
+    glBindTexture(GL_TEXTURE_2D, g.colormap_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_R8UI,
+        256, 34,
+        0,
+        GL_RED_INTEGER,
+        GL_UNSIGNED_BYTE,
+        colormap);
+    delete[] colormap;
 
 
     /* make GLTextures from the textures */
@@ -946,9 +1033,14 @@ int main(int argc, char *argv[])
 
     /* FPS timer */
     auto timer1hz = SDL_AddTimer(1000, callback1hz, nullptr);
+    /* game update timer */
+    auto timer35hz = SDL_AddTimer(1000 / 35, callback35hz, nullptr);
 
-    float const speed = 5;
+    float const speed = 256;
     bool delta[4] = {false,false,false,false};
+    bool animation_update = false;
+    Uint64 const freq = SDL_GetPerformanceFrequency();
+
     SDL_Event e;
     for (bool running = true; running; )
     {
@@ -1072,6 +1164,15 @@ int main(int argc, char *argv[])
                 case State::InLevel:
                     switch (e.type)
                     {
+                    case SDL_USEREVENT:
+                        switch (e.user.code)
+                        {
+                        case 0:
+                            animation_update = true;
+                            break;
+                        }
+                        break;
+
                     case SDL_MOUSEMOTION:
                         g.cam.rotate(
                             -e.motion.xrel / 10.0,
@@ -1242,14 +1343,18 @@ int main(int argc, char *argv[])
         }
 
         /* update the game */
+        Uint64 now = SDL_GetPerformanceCounter();
         if (gs.state == State::InLevel && !gs.menu_open)
         {
             double dx = delta[0] - delta[1],
                    dz = delta[2] - delta[3];
             if (dx != 0 || dz != 0)
             {
+                float deltatime = (now - gs.last_update) / (float)freq;
+
                 g.cam.move(
                     speed
+                    * deltatime
                     * glm::normalize(glm::vec3{dx, 0, dz}));
             }
             int ssector = -1;
@@ -1334,20 +1439,74 @@ int main(int argc, char *argv[])
                 }
             }
 
-            /* face */
-            /* TODO: animation */
-            guidef[29].first =\
-                "STFST"
-                + std::string{
-                    (char)('4' - glm::min(100, doomguy.health) / 25)}
-                + "1";
-
             /* arms panel */
             for (size_t i = 2; i <= 7; ++i)
             {
                 guidef[31 + (i - 2)].first =\
                     (doomguy.weapon == i? "STYSNUM" : "STGNUM")
                     + std::string{(char)('0' + i)};
+            }
+        }
+        gs.last_update = now;
+        if (gs.state == State::InLevel && !gs.menu_open && animation_update)
+        {
+            animation_update = false;
+
+            if (++doomguy.glancecounter >= 10)
+            {
+                doomguy.glancecounter = 0;
+                doomguy.glance_idx++;
+                doomguy.glance_idx %= doomguy.glance.size();
+            }
+
+            /* HUD Doomguy face */
+            /* TODO: animation */
+            guidef[29].first =\
+                "STFST"
+                + std::string{
+                    (char)(
+                        '4'
+                        - glm::min(100, doomguy.health) / 25)}
+                + std::string{
+                    (char)('0' + doomguy.glance[doomguy.glance_idx])};
+
+            /* animate the Things */
+            for (auto &thing : renderlevel.things)
+            {
+                if (   thing.framecount != -1
+                    && !thing.sprites.empty())
+                {
+                    if (thing.cleanloop)
+                    {
+                        if (thing.reverse_anim)
+                        {
+                            thing.frame_idx--;
+                            if (thing.frame_idx < 0)
+                            {
+                                thing.frame_idx = 1;
+                                thing.reverse_anim =\
+                                    false;
+                            }
+                        }
+                        else
+                        {
+                            thing.frame_idx++;
+                            if (   thing.frame_idx
+                                >= thing.framecount)
+                            {
+                                thing.frame_idx -= 2;
+                                thing.reverse_anim =\
+                                    true;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        thing.frame_idx++;
+                        thing.frame_idx %=\
+                            thing.framecount;
+                    }
+                }
             }
         }
 
@@ -1379,7 +1538,9 @@ int main(int argc, char *argv[])
             glDisable(GL_DEPTH_TEST);
 
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, g.palette_id);
+            glBindTexture(GL_TEXTURE_2D, g.palette_texture);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, g.colormap_texture);
             glActiveTexture(GL_TEXTURE1);
 
             auto &img = g.menu_images["TITLEPIC"];
@@ -1398,7 +1559,9 @@ int main(int argc, char *argv[])
 
             guiprog.use();
             guiprog.set("palettes", 0);
-            guiprog.set("palette", 0);
+            guiprog.set("palette_idx", 0);
+            guiprog.set("colormap", 2);
+            guiprog.set("colormap_idx", 0);
             guiprog.set("tex", 1);
             guiprog.set("position",
                 glm::scale(glm::mat4{1}, glm::vec3{w, h, 1}));
@@ -1451,6 +1614,7 @@ int main(int argc, char *argv[])
 
     /* cleanup */
     SDL_RemoveTimer(timer1hz);
+    SDL_RemoveTimer(timer35hz);
 
     glDeleteRenderbuffers(1, &screendepthstencil);
     glDeleteTextures(1, &screentexture);
@@ -1459,7 +1623,6 @@ int main(int argc, char *argv[])
     SDL_GL_DeleteContext(context);
     SDL_DestroyWindow(win);
     SDL_Quit();
-    fclose(wadfile);
 
     printf("Average FPS: %g\n",
         (double)frames_cumulative / (double)seconds_count);
@@ -1492,39 +1655,78 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
         /* TODO: set thing options filter externally */
         if (thing.options & SKILL3 && !(thing.options & MP_ONLY))
         {
-            /* TODO: animated sprites */
+            out.things.push_back(RenderThing{});
+            RenderThing &rt = out.things.back();
+            rt.angle = thing.angle;
+
             auto &data = thingdata[thing.type];
-            std::string sprname = "";
+            std::unordered_map<
+                std::string,
+                std::pair<std::string, bool>> sprindices{};
             switch (data.frames)
             {
+            /* no image */
             case -1:
-                /* no image */
                 break;
+            /* has angled views */
             case 0:
-                sprname = data.sprite + "A1";
-                break;
+              {
+                auto sprlumps = lvl.wad->findall(data.sprite);
+                for (char rot = '1'; rot <= '8'; ++rot)
+                {
+                    auto idx = std::string{'A'} + std::string{rot};
+                    for (auto &lump : sprlumps)
+                    {
+                        auto sprname = std::string{lump.name};
+                        if (sprname[4] == 'A' && sprname[5] == rot)
+                        {
+                            sprindices[idx] = {sprname, true};
+                            break;
+                        }
+                        else if (  sprname[6] == 'A'
+                                && sprname[7] == rot)
+                        {
+                            sprindices[idx] = {sprname, false};
+                            break;
+                        }
+                    }
+                }
+                rt.angled = true;
+                rt.cleanloop = false;
+                /* TODO: this is set per-thing? */
+                rt.framecount = 1;
+              } break;
+            /* no angled views */
             default:
                 if (data.frames > 0)
                 {
-                    sprname = data.sprite + "A0";
+                    for (int i = 0; i < data.frames; ++i)
+                    {
+                        std::string frame{(char)('A' + i)};
+                        sprindices[frame + "0"] =\
+                            {data.sprite + frame + "0", false};
+                        rt.angled = false;
+                        rt.cleanloop = data.cleanloop;
+                        rt.framecount = data.frames;
+                    }
                 }
                 else
                 {
-                    sprname =\
-                        data.sprite
-                        + std::string{
-                            1,
-                            (char)('A' + (-data.frames - 2))}
-                        + "0";
+                    std::string frame{
+                        (char)('A' - (data.frames + 2))};
+                    sprindices[frame + "0"] =\
+                        {data.sprite + frame + "0", false};
+                    rt.angled = false;
+                    rt.cleanloop = false;
+                    rt.framecount = -1;
+                    rt.frame_idx = -(data.frames + 2);
                 }
                 break;
             }
-            sprname = sprname;
 
             /* get the thing's y position
              * (ie. the floor height of the sector it's inside) */
             int ssector = -1;
-            double y = 0;
             try
             {
                 ssector = get_ssector(thing.x, thing.y, lvl);
@@ -1536,39 +1738,26 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
             {
                 auto &seg = lvl.segs[lvl.ssectors[ssector].start];
                 auto &ld = lvl.linedefs[seg.linedef];
-                y = (
-                    seg.direction?
-                        ld.left
-                        : ld.right)->sector->floor;
+                rt.sector =\
+                    (seg.direction? ld.left : ld.right)->sector;
             }
 
-            /* make the picture data */
-            if (sprname != "")
+            /* set the thing's mesh and position */
+            for (auto &p1 : sprindices)
             {
+                auto &idx = p1.first;
+                auto &p2 = p1.second;
+                auto &sprname = p2.first;
+                bool flipx = p2.second;
+
                 auto &spr = lvl.wad->sprites[sprname];
 
-                GLfloat w = spr.width,
-                        h = spr.height;
-                out.things.emplace_back(
-                    g.sprites[sprname].get(),
-                    new Mesh{{
-                        {(GLfloat)-spr.left+0, 0, 0,  0, 1},
-                        {(GLfloat)-spr.left+w, 0, 0,  1, 1},
-                        {(GLfloat)-spr.left+w, h, 0,  1, 0},
-                        {(GLfloat)-spr.left+0, h, 0,  0, 0}},
-                        {0,1,2, 2,3,0}},
-                    glm::vec3{
-                        -thing.x,
-                        y + (spr.top - spr.height),
-                        thing.y});
+                rt.sprites[idx].tex = g.sprites[sprname].get();
+                rt.sprites[idx].flipx = flipx;
+                rt.sprites[idx].offset.x = spr.left;
+                rt.sprites[idx].offset.y = spr.top;
             }
-            else
-            {
-                out.things.emplace_back(
-                    nullptr,
-                    nullptr,
-                    glm::vec3{-thing.x, y, thing.y});
-            }
+            rt.pos = glm::vec3{-thing.x, rt.sector->floor, thing.y};
         }
     }
 
@@ -1725,8 +1914,8 @@ RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
     {
         out.automap.emplace_back(
             new Mesh{
-                {-ld.start->x,ld.start->y,0, 0,0},
-                {-ld.end->x  ,ld.end->y  ,0, 0,0}});
+                {(GLfloat)-ld.start->x,(GLfloat)ld.start->y,0, 0,0},
+                {(GLfloat)-ld.end->x  ,(GLfloat)ld.end->y  ,0, 0,0}});
     }
 
     return out;
@@ -1787,28 +1976,76 @@ void render_level(RenderLevel const &lvl, RenderGlobals const &g)
 
 
     /* draw the things */
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g.palette_texture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, g.colormap_texture);
+    glActiveTexture(GL_TEXTURE1);
+
     g.billboard_shader->use();
     g.billboard_shader->set("camera", g.cam.matrix());
     g.billboard_shader->set("projection", g.projection);
     g.billboard_shader->set("palettes", 0);
     g.billboard_shader->set("palette", g.palette_number);
+    g.billboard_shader->set("colormap", 2);
     g.billboard_shader->set("tex", 1);
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g.palette_id);
-    glActiveTexture(GL_TEXTURE1);
+    thingquad->bind();
+
     for (auto &t : lvl.things)
     {
-        if (t.sprite != nullptr)
+        if (!t.sprites.empty())
         {
-            t.sprite->bind();
-            g.billboard_shader->set("model",
-                glm::translate(glm::mat4{1}, t.pos));
+            g.billboard_shader->set("colormap_idx",
+                (255 - t.sector->lightlevel) / 8);
 
-            t.mesh->bind();
+            std::string sprname = "";
+
+            if (t.angled)
+            {
+                char frame = 'A' + t.frame_idx;
+                char angle = '1';
+
+                double a =\
+                    glm::degrees(
+                        atan2(
+                            t.pos.z - g.cam.pos.z,
+                            t.pos.x - g.cam.pos.x));
+                if (a < 0)
+                {
+                    a = 360.0 + a;
+                }
+                int ang = fmod(a + t.angle + 22.5, 360.0) / 45;
+                angle = '1' + (char)ang;
+
+                sprname = std::string{frame} + std::string{angle};
+            }
+            else
+            {
+                char frame = 'A' + t.frame_idx;
+                sprname = std::string{frame} + "0";
+            }
+
+            auto &spr = t.sprites.at(sprname);
+            auto scale =\
+                glm::scale(
+                    glm::mat4{1},
+                    glm::vec3{spr.tex->width, spr.tex->height, 1});
+
+            g.billboard_shader->set("position",
+                glm::translate(
+                    glm::mat4{1},
+                    glm::vec3{
+                        t.pos.x - (spr.tex->width - (spr.offset.x*2)),
+                        t.pos.y - (spr.tex->height - spr.offset.y),
+                        t.pos.z}));
+            g.billboard_shader->set("scale", scale);
+            g.billboard_shader->set("flipx", spr.flipx);
+
+            spr.tex->bind();
             glDrawElements(
                 GL_TRIANGLES,
-                t.mesh->size(),
+                thingquad->size(),
                 GL_UNSIGNED_INT,
                 0);
         }
@@ -1854,17 +2091,25 @@ void render_ssector(
     RenderGlobals const &g)
 {
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g.palette_id);
+    glBindTexture(GL_TEXTURE_2D, g.palette_texture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, g.colormap_texture);
     glActiveTexture(GL_TEXTURE1);
+
+    auto &ssector = lvl.raw->ssectors[index];
+    auto &seg = lvl.raw->segs[ssector.start];
+    auto &ld = lvl.raw->linedefs[seg.linedef];
+    auto &side = seg.direction? ld.left : ld.right;
 
     g.program->use();
     g.program->set("camera", g.cam.matrix());
     g.program->set("projection", g.projection);
     g.program->set("palettes", 0);
     g.program->set("palette", g.palette_number);
+    g.program->set("colormap", 2);
+    g.program->set("colormap_idx",
+        (255 - side->sector->lightlevel) / 8);
     g.program->set("tex", 1);
-
-    SSector const &ssector = lvl.raw->ssectors[index];
 
     for (size_t i = 0; i < ssector.count; ++i)
     {
@@ -1932,12 +2177,16 @@ void render_hud(
     RenderGlobals &g)
 {
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g.palette_id);
+    glBindTexture(GL_TEXTURE_2D, g.palette_texture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, g.colormap_texture);
     glActiveTexture(GL_TEXTURE1);
 
     guiprog.use();
     guiprog.set("palettes", 0);
-    guiprog.set("palette", 0);
+    guiprog.set("palette_idx", 0);
+    guiprog.set("colormap", 2);
+    guiprog.set("colormap_idx", 0);
     guiprog.set("tex", 1);
     guiquad.bind();
 
@@ -2010,12 +2259,16 @@ void render_menu(
     RenderGlobals &g)
 {
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g.palette_id);
+    glBindTexture(GL_TEXTURE_2D, g.palette_texture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, g.colormap_texture);
     glActiveTexture(GL_TEXTURE1);
 
     guiprog.use();
     guiprog.set("palettes", 0);
-    guiprog.set("palette", 0);
+    guiprog.set("palette_idx", 0);
+    guiprog.set("colormap", 2);
+    guiprog.set("colormap_idx", 0);
     guiprog.set("tex", 1);
     guiquad.bind();
 

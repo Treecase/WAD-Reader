@@ -18,10 +18,10 @@ static std::unordered_map<uint16_t, ThingData> thingdata =
 {
     {0xffff, (ThingData){ "----", -1, 0, "(nothing)" }},
     {0x0000, (ThingData){ "----", -1, 0, "(nothing)" }},
-    {0x0001, (ThingData){ "PLAY",  0, 0, "Player 1 start (Player 1 start needed on ALL levels)" }},
-    {0x0002, (ThingData){ "PLAY",  0, 0, "Player 2 start (Player starts 2-4 are needed in)" }},
-    {0x0003, (ThingData){ "PLAY",  0, 0, "Player 3 start (cooperative mode multiplayer games)" }},
-    {0x0004, (ThingData){ "PLAY",  0, 0, "Player 4 start" }},
+    {0x0001, (ThingData){ "PLAY", -1, 0, "Player 1 start (Player 1 start needed on ALL levels)" }},
+    {0x0002, (ThingData){ "PLAY", -1, 0, "Player 2 start (Player starts 2-4 are needed in)" }},
+    {0x0003, (ThingData){ "PLAY", -1, 0, "Player 3 start (cooperative mode multiplayer games)" }},
+    {0x0004, (ThingData){ "PLAY", -1, 0, "Player 4 start" }},
     {0x000b, (ThingData){ "----", -1, 0, "Deathmatch start positions. Should have >= 4/level" }},
     {0x000e, (ThingData){ "----", -1, 0, "Teleport landing. Where players/monsters land when they teleport to the SECT0R containing this thing" }},
 
@@ -107,7 +107,7 @@ static std::unordered_map<uint16_t, ThingData> thingdata =
     {0x0022, (ThingData){ "CAND",  1, 0, "Candle" }},
     {0x0023, (ThingData){ "CBRA",  1, 0, "Candelabra" }},
     {0x002c, (ThingData){ "TBLU",  4, 0, "Tall blue firestick" }},
-    {0x002d, (ThingData){ "TGRE",  4, 0, "Tall green firestick" }},
+    {0x002d, (ThingData){ "TGRN",  4, 0, "Tall green firestick" }},
     {0x002e, (ThingData){ "TRED",  4, 0, "Tall red firestick" }},
     {0x0037, (ThingData){ "SMBT",  4, 0, "Short blue firestick" }},
     {0x0038, (ThingData){ "SMGT",  4, 0, "Short green firestick" }},
@@ -145,13 +145,13 @@ static std::unordered_map<uint16_t, ThingData> thingdata =
     {0x004f, (ThingData){ "POB1",  1, 0, "Pool of blood" }},
     {0x0050, (ThingData){ "POB2",  1, 0, "Pool of blood" }},
     {0x0051, (ThingData){ "BRS1",  1, 0, "Pool of brains" }},
-    {0x000f, (ThingData){ "PLAY",-17, 0, "Dead player" }},
-    {0x0012, (ThingData){ "POSS",-15, 0, "Dead former human" }},
-    {0x0013, (ThingData){ "SPOS",-15, 0, "Dead former sergeant" }},
-    {0x0014, (ThingData){ "TROO",-16, 0, "Dead imp" }},
-    {0x0015, (ThingData){ "SARG",-17, 0, "Dead demon" }},
-    {0x0016, (ThingData){ "HEAD",-15, 0, "Dead cacodemon" }},
-    {0x0017, (ThingData){ "SKUL",-14, 0, "Dead lost soul, invisible (they blow up when killed)" }}
+    {0x000f, (ThingData){ "PLAY",-15, 0, "Dead player" }},
+    {0x0012, (ThingData){ "POSS",-13, 0, "Dead former human" }},
+    {0x0013, (ThingData){ "SPOS",-13, 0, "Dead former sergeant" }},
+    {0x0014, (ThingData){ "TROO",-14, 0, "Dead imp" }},
+    {0x0015, (ThingData){ "SARG",-15, 0, "Dead demon" }},
+    {0x0016, (ThingData){ "HEAD",-13, 0, "Dead cacodemon" }},
+    {0x0017, (ThingData){ "SKUL",-12, 0, "Dead lost soul, invisible (they blow up when killed)" }}
 };
 
 

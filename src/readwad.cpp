@@ -19,22 +19,20 @@
 
 
 
-WAD readwad(FILE *f)
+WAD loadIWAD(FILE *f)
 {
     WAD wad{};
 
     char id[5] = {0};
     fread(id, 1, 4, f);
 
-    wad.iwad = !strcmp(id, "IWAD");
-    if (!wad.iwad && strcmp(id, "PWAD") != 0)
+    if (strcmp(id, "IWAD") != 0)
     {
         throw std::runtime_error(
-            "WAD id string must be 'IWAD' or 'PWAD'! (got '"
-            + std::string(id)
+            "Bad IWAD id '"
+            + std::string{id}
             + "')");
     }
-
 
     /* read the directory */
     uint32_t lump_count = 0,
@@ -62,8 +60,104 @@ WAD readwad(FILE *f)
 
         wad.directory.push_back(entry);
     }
+    return wad;
+}
 
+void patchWAD(WAD &wad, FILE *f)
+{
+    char id[5] = {0};
+    fread(id, 1, 4, f);
 
+    if (strcmp(id, "PWAD") != 0)
+    {
+        throw std::runtime_error(
+            "Bad PWAD id '"
+            + std::string{id}
+            + "')");
+    }
+
+    /* read the directory */
+    uint32_t lump_count = 0,
+             directory_pointer = 0;
+
+    fread(&lump_count, 4, 1, f);
+    fread(&directory_pointer, 4, 1, f);
+
+    size_t level = 0;
+
+    fseek(f, directory_pointer, SEEK_SET);
+    for (uint32_t i = 0; i <= lump_count; ++i)
+    {
+        DirEntry entry{};
+        uint32_t offset = 0;
+
+        fread(&offset, 4, 1, f);
+        fread(&entry.size, 4, 1, f);
+        fread(&entry.name, 8, 1, f);
+        entry.name[8] = '\0';
+
+        auto data = new uint8_t[entry.size];
+        fseek(f, offset, SEEK_SET);
+        fread(data, 1, entry.size, f);
+        fseek(f, directory_pointer + (16 * i), SEEK_SET);
+        entry.data.reset(data);
+
+        /* if this lump is a level marker,
+         * set the directory search offset to here */
+        if (   (   entry.name[4] == '\0'
+                && entry.name[0] == 'E'
+                && entry.name[2] == 'M'
+                && isdigit(entry.name[1])
+                && isdigit(entry.name[3]))
+            || (   entry.name[5] == '\0'
+                && strncmp("MAP", entry.name, 3) == 0
+                && isdigit(entry.name[3])
+                && isdigit(entry.name[4])))
+        {
+            try
+            {
+                level = wad.lumpidx(entry.name);
+            }
+            catch (std::out_of_range &e)
+            {
+                wad.directory.push_back(entry);
+                level = wad.directory.size() - 1;
+            }
+        }
+        else
+        {
+            try
+            {
+                /* if this lump is a level lump, add it to the level */
+                if (   strcmp(entry.name, "THINGS") == 0
+                    || strcmp(entry.name, "LINEDEFS") == 0
+                    || strcmp(entry.name, "SIDEDEFS") == 0
+                    || strcmp(entry.name, "VERTEXES") == 0
+                    || strcmp(entry.name, "SEGS") == 0
+                    || strcmp(entry.name, "SSECTORS") == 0
+                    || strcmp(entry.name, "NODES") == 0
+                    || strcmp(entry.name, "SECTORS") == 0
+                    || strcmp(entry.name, "REJECT") == 0
+                    || strcmp(entry.name, "BLOCKMAP") == 0)
+                {
+                    wad.directory[wad.lumpidx(entry.name, level)] =\
+                        entry;
+                }
+                else
+                {
+                    wad.directory[wad.lumpidx(entry.name)] = entry;
+                }
+            }
+            catch (std::out_of_range &e)
+            {
+                wad.directory.push_back(entry);
+            }
+        }
+    }
+}
+
+void readwad(WAD &wad)
+{
     /* load PNAMES */
     DirEntry &dir = wad.findlump("PNAMES");
     dir.seek(0, SEEK_SET);
@@ -136,8 +230,6 @@ WAD readwad(FILE *f)
         DirEntry &lump = wad.directory[i];
         wad.sprites[lump.name] = loadpicture(lump);
     }
-
-    return wad;
 }
 
 

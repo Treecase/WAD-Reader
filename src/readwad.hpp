@@ -10,8 +10,12 @@
 #include <cstdio>
 
 
+/* load a .WAD file from disk */
+WAD loadIWAD(FILE *f);
+void patchWAD(WAD &wad, FILE *f);
+
 /* read a .WAD file */
-WAD readwad(FILE *wad);
+void readwad(WAD &wad);
 
 /* read an 'ExMy' lump */
 Level readlevel(std::string level, WAD &wad);

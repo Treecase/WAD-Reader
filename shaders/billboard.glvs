@@ -7,21 +7,30 @@ layout (location = 1) in vec2 aTexCoord;
 
 out vec2 texCoord;
 
-uniform mat4 model;
+uniform bool flipx;
+uniform mat4 position;
+uniform mat4 scale;
 uniform mat4 camera;
 uniform mat4 projection;
 
 
 void main()
 {
-    texCoord = aTexCoord;
-    mat4 billboard = camera * model;
+    if (flipx)
+    {
+        texCoord = vec2(1.0 - aTexCoord.x, aTexCoord.y);
+    }
+    else
+    {
+        texCoord = aTexCoord;
+    }
+    mat4 billboard = camera * position;
     billboard[0][0] = 1;
     billboard[0][1] = 0;
     billboard[0][2] = 0;
     billboard[2][0] = 0;
     billboard[2][1] = 0;
     billboard[2][2] = 1;
-    gl_Position = projection * billboard * vec4(aPos, 1);
+    gl_Position = projection * billboard * scale * vec4(aPos, 1);
 }
 

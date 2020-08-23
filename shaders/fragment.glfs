@@ -7,7 +7,10 @@ in vec2 texCoord;
 out vec4 FragColor;
 
 uniform sampler2D palettes;
-uniform int palette;
+uniform int palette_idx;
+
+uniform usampler2D colormap;
+uniform int colormap_idx;
 
 uniform usampler2D tex;
 
@@ -19,7 +22,15 @@ void main()
     uint index = tmp.r;
     uint alpha = tmp.g;
 
-    vec4 color = texelFetch(palettes, ivec2(index, palette), 0);
+    uint mapped_color = texelFetch(
+        colormap,
+        ivec2(index, colormap_idx),
+        0).r;
+    vec4 color = texelFetch(
+        palettes,
+        ivec2(mapped_color, palette_idx),
+        0);
+
     if (alpha == 0U)
     {
         discard;

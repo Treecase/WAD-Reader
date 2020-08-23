@@ -312,6 +312,11 @@ public:
     std::unordered_map<std::string, Flat> flats;
     std::unordered_map<std::string, Picture> sprites;
 
+    /* get all the lumps starting with the given characters */
+    std::vector<DirEntry> findall(
+        std::string name,
+        size_t start=0) const;
+
     /* get the lump's index in the WAD's directory */
     size_t lumpidx(std::string name, size_t start=0) const;
 

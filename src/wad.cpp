@@ -47,6 +47,24 @@ void DirEntry::seek(ssize_t offset, int whence)
 
 
 
+std::vector<DirEntry> WAD::findall(
+    std::string name,
+    size_t start) const
+{
+    std::vector<DirEntry> out{};
+    for (size_t i = start; i < directory.size(); ++i)
+    {
+        if (strncasecmp(
+                name.c_str(),
+                directory[i].name,
+                name.size()) == 0)
+        {
+            out.push_back(directory[i]);
+        }
+    }
+    return out;
+}
+
 size_t WAD::lumpidx(std::string name, size_t start) const
 {
     for (size_t i = start; i < directory.size(); ++i)
