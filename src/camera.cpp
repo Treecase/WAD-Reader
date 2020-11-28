@@ -28,35 +28,33 @@ void Camera::move(double dx, double dy, double dz)
 
 void Camera::move(glm::vec3 vector)
 {
-    pos += vector.x * glm::normalize(glm::cross(_forward, up));
+    auto f = forward();
+    pos += vector.x * glm::normalize(glm::cross(forward(), up));
     pos += vector.y * up;
-    pos += vector.z * _forward;
+    pos += vector.z * glm::normalize(glm::vec3{f.x, 0, f.z});
 }
 
 void Camera::rotate(double horizontal, double vertical)
 {
     angle.x = fmod(angle.x + horizontal, 360.0);
     angle.y = fmod(angle.y + vertical, 360.0);
-
-    auto hmat = glm::rotate(
-        glm::mat4{1},
-        (float)glm::radians(horizontal),
-        glm::vec3{0, 1, 0});
-    auto vmat = glm::rotate(
-        glm::mat4{1},
-        (float)glm::radians(vertical),
-        glm::normalize(glm::cross(_forward, up)));
-
-    _forward = glm::vec3{vmat * hmat * glm::vec4{_forward, 1}};
 }
 
 glm::mat4 Camera::matrix(void) const
 {
-    return glm::lookAt(pos, pos + _forward, up);
+    return glm::lookAt(pos, pos + forward(), up);
 }
 
 glm::vec3 Camera::forward(void) const
 {
-    return _forward;
+    auto mat = glm::rotate(
+        glm::rotate(
+            glm::mat4{1},
+            (float)glm::radians(angle.x),
+            glm::vec3{0, 1, 0}),
+        (float)glm::radians(angle.y),
+        glm::cross(_forward, up));
+
+    return glm::vec3{mat * glm::vec4{_forward, 1}};
 }
 

@@ -14,10 +14,12 @@ uniform int colormap_idx;
 
 uniform usampler2D tex;
 
+uniform vec2 texOffset;
+
 
 void main()
 {
-    uvec4 tmp = texture(tex, texCoord);
+    uvec4 tmp = texture(tex, texCoord + texOffset);
 
     uint index = tmp.r;
     uint alpha = tmp.g;

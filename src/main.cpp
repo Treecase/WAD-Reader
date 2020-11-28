@@ -8,6 +8,7 @@
 #include "readwad.hpp"
 #include "texture.hpp"
 #include "things.hpp"
+#include "renderlevel.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -32,102 +33,187 @@
 
 
 
-struct RenderThing
+static std::array<uint32_t, 128> CODE_PAGE_437
 {
-    struct SpriteDef
-    {
-        GLTexture *tex;
-        bool flipx;
-        glm::vec2 offset;
-    };
-
-    bool angled;
-    bool cleanloop;
-    bool reverse_anim;
-    int framecount;
-    int frame_idx;
-
-    std::unordered_map<std::string, SpriteDef> sprites;
-
-    Sector *sector;
-    glm::vec3 pos;
-    double angle;
+    /* 8 */
+    0x00C7,
+    0x00FC,
+    0x00E9,
+    0x00E2,
+    0x00E4,
+    0x00E0,
+    0x00E5,
+    0x00E7,
+    0x00EA,
+    0x00EB,
+    0x00E8,
+    0x00EF,
+    0x00EE,
+    0x00EC,
+    0x00C4,
+    0x00C5,
+    /* 9 */
+    0x00C9,
+    0x00E6,
+    0x00c6,
+    0x00f4,
+    0x00f6,
+    0x00f2,
+    0x00fb,
+    0x00f9,
+    0x00ff,
+    0x00d6,
+    0x00dc,
+    0x00a2,
+    0x00a3,
+    0x00a5,
+    0x20a7,
+    0x0192,
+    /* A */
+    0x00e1,
+    0x00ed,
+    0x00f3,
+    0x00fa,
+    0x00f1,
+    0x00d1,
+    0x00aa,
+    0x00ba,
+    0x00bf,
+    0x2310,
+    0x00ac,
+    0x00bd,
+    0x00bc,
+    0x00a1,
+    0x00ab,
+    0x00bb,
+    /* B */
+    0x2591,
+    0x2592,
+    0x2593,
+    0x2502,
+    0x2524,
+    0x2561,
+    0x2562,
+    0x2556,
+    0x2555,
+    0x2563,
+    0x2551,
+    0x2557,
+    0x255d,
+    0x255c,
+    0x255b,
+    0x2510,
+    /* C */
+    0x2514,
+    0x2534,
+    0x252c,
+    0x251c,
+    0x2500,
+    0x253c,
+    0x255e,
+    0x255f,
+    0x255a,
+    0x2554,
+    0x2569,
+    0x2566,
+    0x2560,
+    0x2550,
+    0x256c,
+    0x2567,
+    /* D */
+    0x2568,
+    0x2564,
+    0x2565,
+    0x2559,
+    0x2558,
+    0x2552,
+    0x2553,
+    0x256b,
+    0x256a,
+    0x2518,
+    0x250c,
+    0x2588,
+    0x2584,
+    0x258c,
+    0x2590,
+    0x2580,
+    /* E */
+    0x03b1,
+    0x00df,
+    0x0393,
+    0x03c0,
+    0x03a3,
+    0x03c3,
+    0x00b5,
+    0x03c4,
+    0x03a6,
+    0x0398,
+    0x03a9,
+    0x03b4,
+    0x221e,
+    0x03c6,
+    0x03b5,
+    0x2229,
+    /* F */
+    0x2261,
+    0x00b1,
+    0x2265,
+    0x2264,
+    0x2320,
+    0x2321,
+    0x00f7,
+    0x2248,
+    0x00b0,
+    0x2219,
+    0x00b7,
+    0x221a,
+    0x207f,
+    0x00b2,
+    0x25a0,
+    0x00a0
 };
 
-struct Wall
+char *CODEPAGE437(unsigned char ch)
 {
-    GLTexture *middletex;
-    std::unique_ptr<Mesh> middlemesh;
-
-    GLTexture *uppertex;
-    std::unique_ptr<Mesh> uppermesh;
-
-    GLTexture *lowertex;
-    std::unique_ptr<Mesh> lowermesh;
-
-    Wall(
-            GLTexture *middletex,
-            Mesh *middlemesh,
-            GLTexture *uppertex=nullptr,
-            Mesh *uppermesh=nullptr,
-            GLTexture *lowertex=nullptr,
-            Mesh *lowermesh=nullptr)
-    :   middletex{middletex},
-        middlemesh{middlemesh},
-        uppertex{uppertex},
-        uppermesh{uppermesh},
-        lowertex{lowertex},
-        lowermesh{lowermesh}
+    char *out = nullptr;
+    if (ch <= 0x7F)
     {
+        out = new char[2];
+        out[0] = ch & 0x7F;
+        out[1] = '\0';
     }
-};
-
-struct RenderFlat
-{
-    GLTexture *tex;
-    Mesh *mesh;
-
-    RenderFlat(GLTexture *tex, Mesh *mesh)
-    :   tex{tex},
-        mesh{mesh}
+    else
     {
+        auto codepoint = CODE_PAGE_437[ch & 0x7F];
+        if (codepoint < 0x800)
+        {
+            out = new char[3];
+            out[0] = 0b11000000 | ((codepoint >> 6) & 0x1f);
+            out[1] = 0b10000000 | ((codepoint >> 0) & 0x3f);
+            out[2] = '\0';
+        }
+        else if (codepoint < 0x10000)
+        {
+            out = new char[4];
+            out[0] = 0b11100000 | ((codepoint >> 12) & 0x0f);
+            out[1] = 0b10000000 | ((codepoint >>  6) & 0x3f);
+            out[2] = 0b10000000 | ((codepoint >>  0) & 0x3f);
+            out[3] = '\0';
+        }
+        else
+        {
+            out = new char[4];
+            out[1] = 0b11100000 | ((codepoint >> 16) & 0x0f);
+            out[1] = 0b10000000 | ((codepoint >> 12) & 0x3f);
+            out[2] = 0b10000000 | ((codepoint >>  6) & 0x3f);
+            out[3] = 0b10000000 | ((codepoint >>  0) & 0x3f);
+            out[4] = '\0';
+        }
     }
-};
+    return out;
+}
 
-struct RenderGlobals
-{
-    int width, height;
 
-    Camera cam;
-    std::unique_ptr<Program> program;
-    std::unique_ptr<Program> billboard_shader;
-    std::unique_ptr<Program> automap_program;
-    glm::mat4 projection;
-
-    GLuint palette_texture;
-    GLuint palette_number;
-
-    GLuint colormap_texture;
-
-    std::unordered_map<
-        std::string,
-        std::unique_ptr<GLTexture>> textures,
-                                    flats,
-                                    sprites,
-                                    menu_images,
-                                    gui_images;
-};
-
-struct RenderLevel
-{
-    Level const *raw;
-
-    std::vector<Wall> walls;
-    std::vector<RenderThing> things;
-    std::vector<RenderFlat> floors;
-    std::vector<RenderFlat> ceilings;
-    std::vector<std::unique_ptr<Mesh>> automap;
-};
 
 enum Weapon
 {
@@ -138,7 +224,8 @@ enum Weapon
     Chaingun = 4,
     RocketLauncher = 5,
     PlasmaRifle = 6,
-    BFG9000 = 7
+    BFG9000 = 7,
+    SuperShotgun = 8
 };
 
 struct Player
@@ -155,20 +242,46 @@ struct Player
     size_t glancecounter;
 };
 
+struct Controller
+{
+    double left, right;
+    double forward, backward;
+    double turn;
+};
+
+RenderLevel make_renderlevel(
+    Level const &lvl,
+    RenderGlobals &g,
+    uint8_t include,
+    uint8_t exclude);
+
 enum class State
 {
     TitleScreen,
     InLevel,
+    Exit,
 };
 
 struct GameState
 {
-    RenderGlobals &render_globals;
+    RenderGlobals &rndr;
+    Player &doomguy;
+    WAD &wad;
+
+    Controller ctrl;
+    bool doom2;
+    uint8_t difficulty;
+
+    size_t level_idx;
+    Level level;
+    std::unique_ptr<RenderLevel> renderlevel;
 
     State state;
     bool menu_open;
     bool automap_open;
+
     Uint64 last_update;
+    bool update_animation;
 
     std::string current_menuscreen;
 
@@ -186,11 +299,13 @@ struct GameState
             case State::InLevel:
                 SDL_WarpMouseInWindow(
                     NULL,
-                    render_globals.width / 2,
-                    render_globals.height / 2);
+                    rndr.width / 2,
+                    rndr.height / 2);
                 break;
             case State::TitleScreen:
                 automap_open = false;
+                break;
+            case State::Exit:
                 break;
             }
         }
@@ -207,6 +322,8 @@ struct GameState
                 SDL_SetRelativeMouseMode(SDL_FALSE);
                 automap_open = false;
                 break;
+            case State::Exit:
+                break;
             }
         }
     }
@@ -219,12 +336,84 @@ struct GameState
         transition(state, newmenu);
     }
 
-
-    GameState(RenderGlobals &g, State initial, bool menu_initial)
-    :   render_globals{g},
-        state{initial},
-        menu_open{menu_initial}
+    void setlevel(size_t idx)
     {
+        char episode = '0' + ((idx / 10) % 10);
+        char mission = '0' + (idx % 10);
+        std::string name{};
+
+        if (doom2)
+        {
+            name =\
+                "MAP"
+                + std::string{episode}
+                + std::string{mission};
+        }
+        else
+        {
+            name =\
+                "E"
+                + std::string{(char)(episode + 1)}
+                + "M"
+                + std::string{mission};
+        }
+        level = readlevel(name, wad);
+        renderlevel.reset(
+            new RenderLevel(level, rndr, difficulty, MP_ONLY));
+        level_idx = idx;
+
+        /* set the camera position to player 1's spawn point */
+        for (auto &thing : level.things)
+        {
+            if (thing.type == 1)
+            {
+                rndr.cam.pos.x = -thing.x;
+                rndr.cam.pos.z = thing.y;
+                rndr.cam.angle.x = thing.angle - 90;
+                rndr.cam.angle.y = 0;
+                break;
+            }
+        }
+    }
+
+
+    GameState(
+            RenderGlobals &g,
+            Player &doomguy,
+            WAD &wad,
+            uint8_t difficulty,
+            State initial,
+            bool menu_initial)
+    :   rndr{g},
+        doomguy{doomguy},
+        wad{wad},
+
+        ctrl{},
+        doom2{false},
+        difficulty{difficulty},
+
+        level_idx{0},
+        level{},
+        renderlevel{nullptr},
+
+        state{initial},
+        menu_open{menu_initial},
+        automap_open{false},
+
+        last_update{0},
+        update_animation{false},
+
+        current_menuscreen{""}
+    {
+        try
+        {
+            readlevel("MAP01", wad);
+            doom2 = true;
+        }
+        catch (std::out_of_range &e)
+        {
+            doom2 = false;
+        }
         transition(initial, menu_initial);
     }
 };
@@ -259,8 +448,10 @@ Uint32 callback35hz(Uint32 interval, void *param)
 }
 
 GLTexture *picture2gltexture(Picture const &pic);
-RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g);
 uint16_t get_ssector(int16_t x, int16_t y, Level const &lvl);
+
+void handle_event_TitleScreen(GameState &gs, SDL_Event e);
+void handle_event_InLevel(GameState &gs, SDL_Event e);
 
 void render_level(RenderLevel const &lvl, RenderGlobals const &g);
 void render_node(
@@ -623,9 +814,11 @@ static std::vector<std::string> const hands
     "MIS",  /* rocket launcher */
     "PLS",  /* plasma rifle */
     "BFG",  /* BFG 9000 */
+    "SHT",  /* super shotgun */
 };
 
 static std::unique_ptr<Mesh> automap_cursor{nullptr};
+static GLuint automap_cursor_vbo = 0;
 static std::unique_ptr<Mesh> thingquad{nullptr};
 
 
@@ -664,55 +857,17 @@ int main(int argc, char *argv[])
                     strerror(errno));
                 exit(EXIT_FAILURE);
             }
+            printf("patch: %s\n", argv[2 + i]);
             patchWAD(wad, f);
             fclose(f);
         }
     }
     readwad(wad);
 
-    /* load the first level */
-    int episode = 1,
-        mission = 1;
-
-    Level level{};
-    try
-    {
-        level = readlevel(
-            (   "E"
-                + std::to_string(episode)
-                + "M"
-                + std::to_string(mission)),
-            wad);
-    }
-    catch (std::out_of_range &e)
-    {
-        episode = 0;
-        level = readlevel(
-            "MAP" + std::to_string(episode) + std::to_string(mission),
-            wad);
-    }
-
 
     RenderGlobals g{};
     g.width  = 320;
     g.height = 240;
-
-    Player doomguy{};
-    doomguy.bullets = 50;
-    doomguy.shells  = 0;
-    doomguy.rockets = 0;
-    doomguy.cells   = 0;
-    doomguy.max_bullets = 200;
-    doomguy.max_shells  = 50;
-    doomguy.max_rockets = 50;
-    doomguy.max_cells   = 300;
-    doomguy.health = 100;
-    doomguy.armor  = 0;
-    doomguy.weapon = Weapon::Pistol;
-
-    doomguy.glance = {1,0,1,2};
-    doomguy.glance_idx = 0;
-    doomguy.glancecounter = 0;
 
 
     /* setup SDL stuff */
@@ -831,6 +986,25 @@ int main(int argc, char *argv[])
             {-0.01,-0.005,0, 0,0},
             { 0.00,+0.020,0, 0,0},
             { 0.01,-0.005,0, 0,0}});
+    automap_cursor->bind();
+    std::vector<glm::vec4> colors{
+        6,
+        glm::vec4{1.0, 1.0, 1.0, 1.0}};
+    glGenBuffers(1, &automap_cursor_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, automap_cursor_vbo);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        6 * sizeof(glm::vec4),
+        colors.data(),
+        GL_STATIC_DRAW);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(
+        1,
+        4, GL_FLOAT,
+        GL_FALSE,
+        sizeof(glm::vec4),
+        (void *)0);
+
 
     /* quad used for rendering Things */
     thingquad.reset(
@@ -923,7 +1097,7 @@ int main(int argc, char *argv[])
 
     /* set up the colormap */
     auto colormap = new uint8_t[256 * 34];
-    auto &dir = wad.findlump("COLORMAP");
+    DirEntry dir = wad.findlump("COLORMAP");
     dir.seek(0, SEEK_SET);
     dir.read(colormap, 256 * 34);
 
@@ -1015,21 +1189,30 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* set the camera location to the player start */
-    for (auto &thing : level.things)
-    {
-        if (thing.type == 1)
-        {
-            g.cam.pos.x = -thing.x;
-            g.cam.pos.z = thing.y;
-        }
-    }
+
+    Player doomguy{};
+    doomguy.bullets = 50;
+    doomguy.shells  = 0;
+    doomguy.rockets = 0;
+    doomguy.cells   = 0;
+    doomguy.max_bullets = 200;
+    doomguy.max_shells  = 50;
+    doomguy.max_rockets = 50;
+    doomguy.max_cells   = 300;
+    doomguy.health = 100;
+    doomguy.armor  = 0;
+    doomguy.weapon = Weapon::Pistol;
+
+    doomguy.glance = {1,0,1,2};
+    doomguy.glance_idx = 0;
+    doomguy.glancecounter = 0;
 
 
-    GameState gs{g, State::TitleScreen, false};
+    GameState gs{g, doomguy, wad, SKILL3, State::TitleScreen, false};
 
-    /* set up the level's render data */
-    auto renderlevel = make_renderlevel(level, g);
+    /* load the first level */
+    gs.setlevel(1);
+
 
     /* FPS timer */
     auto timer1hz = SDL_AddTimer(1000, callback1hz, nullptr);
@@ -1037,21 +1220,20 @@ int main(int argc, char *argv[])
     auto timer35hz = SDL_AddTimer(1000 / 35, callback35hz, nullptr);
 
     float const speed = 256;
-    bool delta[4] = {false,false,false,false};
-    bool animation_update = false;
+    float const turnspeed = 256;
     Uint64 const freq = SDL_GetPerformanceFrequency();
 
     SDL_Event e;
-    for (bool running = true; running; )
+    while (gs.state != State::Exit)
     {
-        while (SDL_PollEvent(&e) && running)
+        while (SDL_PollEvent(&e) && gs.state != State::Exit)
         {
             /* events that don't depend on the
              * game state are handled here */
             switch (e.type)
             {
             case SDL_QUIT:
-                running = false;
+                gs.state = State::Exit;
                 break;
 
             case SDL_WINDOWEVENT:
@@ -1136,209 +1318,17 @@ int main(int argc, char *argv[])
                 }
                 break;
             }
-            /* === END GAME STATE INDEPENDENT EVENT HANDLING === */
-            if (gs.menu_open)
+
+            switch (gs.state)
             {
-                /* these actions are taken if the menu is open*/
-                switch (e.type)
-                {
-                case SDL_MOUSEBUTTONDOWN:
-                    switch (gs.state)
-                    {
-                    case State::TitleScreen:
-                        gs.transition(State::InLevel, false);
-                        break;
-                    default:
-                        running = false;
-                        break;
-                    }
-                    break;
-                }
-                /* === END MENU EVENT HANDLING === */
-            }
-            else
-            {
-                /* these actions are taken if the menu is NOT open */
-                switch (gs.state)
-                {
-                case State::InLevel:
-                    switch (e.type)
-                    {
-                    case SDL_USEREVENT:
-                        switch (e.user.code)
-                        {
-                        case 0:
-                            animation_update = true;
-                            break;
-                        }
-                        break;
-
-                    case SDL_MOUSEMOTION:
-                        g.cam.rotate(
-                            -e.motion.xrel / 10.0,
-                            -e.motion.yrel / 10.0);
-                        break;
-
-                    case SDL_MOUSEBUTTONDOWN:
-                        switch (doomguy.weapon)
-                        {
-                        case Weapon::Fist:
-                        case Weapon::Chainsaw:
-                            break;
-                        case Weapon::Pistol:
-                        case Weapon::Chaingun:
-                            if (doomguy.bullets > 0)
-                            {
-                                doomguy.bullets -= 1;
-                            }
-                            break;
-                        case Weapon::Shotgun:
-                            if (doomguy.shells > 0)
-                            {
-                                doomguy.shells -= 1;
-                            }
-                            break;
-                        case Weapon::RocketLauncher:
-                            if (doomguy.rockets > 0)
-                            {
-                                doomguy.rockets -= 1;
-                            }
-                            break;
-                        case Weapon::PlasmaRifle:
-                        case Weapon::BFG9000:
-                            if (doomguy.cells > 0)
-                            {
-                                doomguy.cells -= 1;
-                            }
-                            break;
-                        }
-                        break;
-
-                    case SDL_MOUSEWHEEL:
-                        doomguy.weapon -= e.wheel.y;
-                        doomguy.weapon %= 8;
-                        break;
-
-                    case SDL_KEYDOWN:
-                        switch (e.key.keysym.sym)
-                        {
-                        case SDLK_d:
-                            delta[0] = true;
-                            break;
-                        case SDLK_a:
-                            delta[1] = true;
-                            break;
-                        case SDLK_w:
-                            delta[2] = true;
-                            break;
-                        case SDLK_s:
-                            delta[3] = true;
-                            break;
-                        case SDLK_1:
-                            if (doomguy.weapon == Weapon::Chainsaw)
-                            {
-                                doomguy.weapon = Weapon::Fist;
-                            }
-                            else
-                            {
-                                doomguy.weapon = Weapon::Chainsaw;
-                            }
-                            break;
-                        case SDLK_2:
-                            doomguy.weapon = Weapon::Pistol;
-                            break;
-                        case SDLK_3:
-                            doomguy.weapon = Weapon::Shotgun;
-                            break;
-                        case SDLK_4:
-                            doomguy.weapon = Weapon::Chaingun;
-                            break;
-                        case SDLK_5:
-                            doomguy.weapon = Weapon::RocketLauncher;
-                            break;
-                        case SDLK_6:
-                            doomguy.weapon = Weapon::PlasmaRifle;
-                            break;
-                        case SDLK_7:
-                            doomguy.weapon = Weapon::BFG9000;
-                            break;
-                        case SDLK_TAB:
-                            gs.automap_open = !gs.automap_open;
-                            break;
-                        }
-                        break;
-
-                    case SDL_KEYUP:
-                        switch (e.key.keysym.sym)
-                        {
-                        case SDLK_d:
-                            delta[0] = false;
-                            break;
-                        case SDLK_a:
-                            delta[1] = false;
-                            break;
-                        case SDLK_w:
-                            delta[2] = false;
-                            break;
-                        case SDLK_s:
-                            delta[3] = false;
-                            break;
-
-                        case SDLK_SPACE:
-                            mission += 1;
-                            if (mission > 9)
-                            {
-                                mission = 1;
-                                episode += 1;
-                                if (episode > 3)
-                                {
-                                    episode = 1;
-                                }
-                            }
-                            try
-                            {
-                                level = readlevel(
-                                    (   "E"
-                                        + std::to_string(episode)
-                                        + "M"
-                                        + std::to_string(mission)),
-                                    wad);
-                            }
-                            catch (std::out_of_range &e)
-                            {
-                                level = readlevel(
-                                    (   "MAP"
-                                        + std::to_string(episode)
-                                        + std::to_string(mission)),
-                                    wad);
-                            }
-                            renderlevel =\
-                                make_renderlevel(level, g);
-
-                            for (auto &thing : level.things)
-                            {
-                                if (thing.type == 1)
-                                {
-                                    g.cam.pos.x = -thing.x;
-                                    g.cam.pos.z = thing.y;
-                                    break;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                    break;
-                /* === END InLevel EVENT HANDLING === */
-                case State::TitleScreen:
-                    switch (e.type)
-                    {
-                    case SDL_MOUSEBUTTONDOWN:
-                        gs.transition(true);
-                        break;
-                    }
-                    break;
-                /* === END TitleScreen EVENT HANDLING === */
-                }
+            case State::TitleScreen:
+                handle_event_TitleScreen(gs, e);
+                break;
+            case State::InLevel:
+                handle_event_InLevel(gs, e);
+                break;
+            case State::Exit:
+                break;
             }
         }
 
@@ -1346,12 +1336,17 @@ int main(int argc, char *argv[])
         Uint64 now = SDL_GetPerformanceCounter();
         if (gs.state == State::InLevel && !gs.menu_open)
         {
-            double dx = delta[0] - delta[1],
-                   dz = delta[2] - delta[3];
+            /* TODO: raycast for hitscan and rendering */
+
+            float deltatime =\
+                (now - gs.last_update) / (float)freq;
+
+            g.cam.rotate(turnspeed * gs.ctrl.turn * deltatime, 0);
+
+            double dx = gs.ctrl.right - gs.ctrl.left,
+                   dz = gs.ctrl.forward - gs.ctrl.backward;
             if (dx != 0 || dz != 0)
             {
-                float deltatime = (now - gs.last_update) / (float)freq;
-
                 g.cam.move(
                     speed
                     * deltatime
@@ -1361,15 +1356,16 @@ int main(int argc, char *argv[])
             try
             {
                 ssector =\
-                    get_ssector(-g.cam.pos.x, g.cam.pos.z, level);
+                    get_ssector(-g.cam.pos.x, g.cam.pos.z, gs.level);
             }
             catch (std::runtime_error &e)
             {
             }
             if (ssector != -1)
             {
-                auto &seg = level.segs[level.ssectors[ssector].start];
-                auto &ld = level.linedefs[seg.linedef];
+                auto &seg =\
+                    gs.level.segs[gs.level.ssectors[ssector].start];
+                auto &ld = gs.level.linedefs[seg.linedef];
                 g.cam.pos.y = (
                     seg.direction?
                         ld.left
@@ -1387,6 +1383,7 @@ int main(int argc, char *argv[])
             case Weapon::Chaingun:
                 ammo = doomguy.bullets;
                 break;
+            case Weapon::SuperShotgun:
             case Weapon::Shotgun:
                 ammo = doomguy.shells;
                 break;
@@ -1446,11 +1443,17 @@ int main(int argc, char *argv[])
                     (doomguy.weapon == i? "STYSNUM" : "STGNUM")
                     + std::string{(char)('0' + i)};
             }
+            if (doomguy.weapon == Weapon::SuperShotgun)
+            {
+                guidef[32].first = "STYSNUM" + std::string{'3'};
+            }
         }
         gs.last_update = now;
-        if (gs.state == State::InLevel && !gs.menu_open && animation_update)
+        if (   gs.state == State::InLevel
+            && !gs.menu_open
+            && gs.update_animation)
         {
-            animation_update = false;
+            gs.update_animation = false;
 
             if (++doomguy.glancecounter >= 10)
             {
@@ -1471,7 +1474,7 @@ int main(int argc, char *argv[])
                     (char)('0' + doomguy.glance[doomguy.glance_idx])};
 
             /* animate the Things */
-            for (auto &thing : renderlevel.things)
+            for (auto &thing : gs.renderlevel->things)
             {
                 if (   thing.framecount != -1
                     && !thing.sprites.empty())
@@ -1513,28 +1516,59 @@ int main(int argc, char *argv[])
 
         /* render the scene into the framebuffer */
         glBindFramebuffer(GL_FRAMEBUFFER, screenframebuffer);
-            glClear(
-                GL_COLOR_BUFFER_BIT
-                | GL_DEPTH_BUFFER_BIT
-                | GL_STENCIL_BUFFER_BIT);
+        glClear(
+            GL_COLOR_BUFFER_BIT
+            | GL_DEPTH_BUFFER_BIT
+            | GL_STENCIL_BUFFER_BIT);
         switch (gs.state)
         {
         case State::InLevel:
+          {
+            /* draw the sky */
+            auto &img = g.textures["sky1"];
+
+            double aspect_w = img->width;
+            double const w = img->width / aspect_w;
+
+            glDisable(GL_DEPTH_TEST);
+            guiprog.use();
+            guiprog.set("palettes", 0);
+            guiprog.set("palette_idx", 0);
+            guiprog.set("colormap", 2);
+            guiprog.set("colormap_idx", 0);
+            guiprog.set("tex", 1);
+            guiprog.set("position",
+                glm::scale(glm::mat4{1},
+                glm::vec3{w, 1, 1}));
+            guiprog.set("texOffset", glm::vec2{
+                (-g.cam.angle.x * (1024.0 / img->width)) / 360.0,
+                0});
+
+            img->bind();
+            guiquad.bind();
+            glDrawElements(
+                GL_TRIANGLES,
+                guiquad.size(),
+                GL_UNSIGNED_INT,
+                0);
+            guiprog.set("texOffset", glm::vec2{0, 0});
+
             /* draw the first person view */
             glEnable(GL_DEPTH_TEST);
-            render_level(renderlevel, g);
+            render_level(*gs.renderlevel, g);
             /* draw the automap */
             glDisable(GL_DEPTH_TEST);
             if (gs.automap_open)
             {
-                render_automap(renderlevel, g);
+                render_automap(*gs.renderlevel, g);
             }
             /* draw the HUD */
             glDisable(GL_DEPTH_TEST);
             render_hud(doomguy, wad, guiquad, guiprog, g);
-            break;
+          } break;
 
         case State::TitleScreen:
+          {
             glDisable(GL_DEPTH_TEST);
 
             glActiveTexture(GL_TEXTURE0);
@@ -1573,6 +1607,9 @@ int main(int argc, char *argv[])
                 guiquad.size(),
                 GL_UNSIGNED_INT,
                 0);
+          } break;
+
+        case State::Exit:
             break;
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1602,19 +1639,59 @@ int main(int argc, char *argv[])
         frames_per_second++;
     }
 
-    auto &exittext = wad.findlump("ENDOOM");
+    char vga_to_vt102[16] =
+    {
+        '0',
+        '4',
+        '2',
+        '6',
+        '1',
+        '5',
+        '3',
+        '7',
+        '0',
+        '4',
+        '2',
+        '6',
+        '1',
+        '5',
+        '3',
+        '7',
+    };
+
+    /* TODO: switch from using raw ANSI escapes
+     * to something more cross-platform */
+    DirEntry exittext = wad.findlump("ENDOOM");
+    auto textdata = exittext.data.get();
     for (size_t y = 0; y < 25; ++y)
     {
         for (size_t x = 0; x < 80; ++x)
         {
-            putchar(exittext.data.get()[(y * 160) + (x * 2)]);
+            unsigned char vga = textdata[(y * 160) + (x * 2) + 1];
+            unsigned char ch = textdata[(y * 160) + (x * 2)];
+
+            unsigned char fore = vga & 0x0f;
+            unsigned char back = (vga >> 4) & 0x07;
+            unsigned char blink = (vga >> 7) & 0x01;
+
+            char *utf8 = CODEPAGE437(ch);
+            printf("\x1b[3%c;4%c;%s;%sm%s",
+                vga_to_vt102[fore],
+                vga_to_vt102[back],
+                blink? "5" : "25",
+                fore > 7? "1" : "22",
+                utf8);
+            delete[] utf8;
         }
         putchar('\n');
     }
+    printf("\x1b[0m");
 
     /* cleanup */
     SDL_RemoveTimer(timer1hz);
     SDL_RemoveTimer(timer35hz);
+
+    glDeleteBuffers(1, &automap_cursor_vbo);
 
     glDeleteRenderbuffers(1, &screendepthstencil);
     glDeleteTextures(1, &screentexture);
@@ -1644,299 +1721,36 @@ GLTexture *picture2gltexture(Picture const &p)
     return gltexture;
 }
 
-RenderLevel make_renderlevel(Level const &lvl, RenderGlobals &g)
-{
-    RenderLevel out{};
-    out.raw = &lvl;
-
-    /* make RenderThings from things */
-    for (auto &thing : lvl.things)
-    {
-        /* TODO: set thing options filter externally */
-        if (thing.options & SKILL3 && !(thing.options & MP_ONLY))
-        {
-            out.things.push_back(RenderThing{});
-            RenderThing &rt = out.things.back();
-            rt.angle = thing.angle;
-
-            auto &data = thingdata[thing.type];
-            std::unordered_map<
-                std::string,
-                std::pair<std::string, bool>> sprindices{};
-            switch (data.frames)
-            {
-            /* no image */
-            case -1:
-                break;
-            /* has angled views */
-            case 0:
-              {
-                auto sprlumps = lvl.wad->findall(data.sprite);
-                for (char rot = '1'; rot <= '8'; ++rot)
-                {
-                    auto idx = std::string{'A'} + std::string{rot};
-                    for (auto &lump : sprlumps)
-                    {
-                        auto sprname = std::string{lump.name};
-                        if (sprname[4] == 'A' && sprname[5] == rot)
-                        {
-                            sprindices[idx] = {sprname, true};
-                            break;
-                        }
-                        else if (  sprname[6] == 'A'
-                                && sprname[7] == rot)
-                        {
-                            sprindices[idx] = {sprname, false};
-                            break;
-                        }
-                    }
-                }
-                rt.angled = true;
-                rt.cleanloop = false;
-                /* TODO: this is set per-thing? */
-                rt.framecount = 1;
-              } break;
-            /* no angled views */
-            default:
-                if (data.frames > 0)
-                {
-                    for (int i = 0; i < data.frames; ++i)
-                    {
-                        std::string frame{(char)('A' + i)};
-                        sprindices[frame + "0"] =\
-                            {data.sprite + frame + "0", false};
-                        rt.angled = false;
-                        rt.cleanloop = data.cleanloop;
-                        rt.framecount = data.frames;
-                    }
-                }
-                else
-                {
-                    std::string frame{
-                        (char)('A' - (data.frames + 2))};
-                    sprindices[frame + "0"] =\
-                        {data.sprite + frame + "0", false};
-                    rt.angled = false;
-                    rt.cleanloop = false;
-                    rt.framecount = -1;
-                    rt.frame_idx = -(data.frames + 2);
-                }
-                break;
-            }
-
-            /* get the thing's y position
-             * (ie. the floor height of the sector it's inside) */
-            int ssector = -1;
-            try
-            {
-                ssector = get_ssector(thing.x, thing.y, lvl);
-            }
-            catch (std::runtime_error &e)
-            {
-            }
-            if (ssector != -1)
-            {
-                auto &seg = lvl.segs[lvl.ssectors[ssector].start];
-                auto &ld = lvl.linedefs[seg.linedef];
-                rt.sector =\
-                    (seg.direction? ld.left : ld.right)->sector;
-            }
-
-            /* set the thing's mesh and position */
-            for (auto &p1 : sprindices)
-            {
-                auto &idx = p1.first;
-                auto &p2 = p1.second;
-                auto &sprname = p2.first;
-                bool flipx = p2.second;
-
-                auto &spr = lvl.wad->sprites[sprname];
-
-                rt.sprites[idx].tex = g.sprites[sprname].get();
-                rt.sprites[idx].flipx = flipx;
-                rt.sprites[idx].offset.x = spr.left;
-                rt.sprites[idx].offset.y = spr.top;
-            }
-            rt.pos = glm::vec3{-thing.x, rt.sector->floor, thing.y};
-        }
-    }
-
-    /* create Walls from the segs */
-    /* TODO: animated walls */
-    for (auto &seg : lvl.segs)
-    {
-        auto &ld = lvl.linedefs[seg.linedef];
-        auto &side = seg.direction? ld.left : ld.right;
-        auto &opp  = seg.direction? ld.right : ld.left;
-
-        out.walls.emplace_back(nullptr, nullptr);
-
-        /* middle */
-        if (!(ld.flags & TWOSIDED)
-            || side->middle != "-")
-        {
-            int top = side->sector->ceiling;
-            int bot = side->sector->floor;
-
-            std::string texname = tolowercase(side->middle);
-            auto &tex = g.textures[texname];
-            out.walls.back().middletex = tex.get();
-
-            double const tw = tex->width,
-                         th = tex->height;
-
-            double len =\
-                sqrt(
-                    pow(seg.end->x - seg.start->x, 2)
-                    + pow(seg.end->y - seg.start->y, 2))
-                / tw;
-            double hgt = abs(top - bot) / th;
-
-            bool unpegged = ld.flags & UNPEGGEDLOWER;
-            double sx = (seg.offset + side->x) / tw,
-                   sy = (side->y / th) + (unpegged? -hgt : 0);
-            double ex = sx + len,
-                   ey = sy + hgt;
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wnarrowing"
-            out.walls.back().middlemesh.reset(new Mesh{
-                {
-                    {-seg.start->x,bot,seg.start->y,  sx,ey},
-                    {-seg.end->x  ,bot,seg.end->y  ,  ex,ey},
-                    {-seg.end->x  ,top,seg.end->y  ,  ex,sy},
-                    {-seg.start->x,top,seg.start->y,  sx,sy},
-                },
-                {0,1,2, 2,3,0}});
-#pragma GCC diagnostic pop
-        }
-        if (ld.flags & TWOSIDED)
-        {
-            /* lower section */
-            if (side->sector->floor < opp->sector->floor)
-            {
-                int top = opp->sector->floor;
-                int bot = side->sector->floor;
-
-                std::string texname = tolowercase(side->lower);
-                if (texname != "-")
-                {
-                    auto &tex = g.textures[texname];
-                    out.walls.back().lowertex = tex.get();
-
-                    double const tw = tex->width,
-                                 th = tex->height;
-
-                    double len =\
-                        sqrt(
-                            pow(seg.end->x - seg.start->x, 2)
-                            + pow(seg.end->y - seg.start->y, 2))
-                        / tw;
-                    double hgt = abs(top - bot) / th;
-
-                    bool unpegged = ld.flags & UNPEGGEDLOWER;
-                    double sx = (seg.offset + side->x) / tw,
-                           sy = side->y / th;
-                    double ex = sx + len,
-                           ey = sy + hgt;
-
-                    if (unpegged)
-                    {
-                        double offset =\
-                            (   glm::max(
-                                    side->sector->ceiling,
-                                    opp->sector->ceiling)
-                                - top)
-                            / th;
-                        sy += offset;
-                        ey += offset;
-                    }
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wnarrowing"
-                    out.walls.back().lowermesh.reset(new Mesh{
-                        {
-                            {-seg.start->x,bot,seg.start->y, sx,ey},
-                            {-seg.end->x  ,bot,seg.end->y  , ex,ey},
-                            {-seg.end->x  ,top,seg.end->y  , ex,sy},
-                            {-seg.start->x,top,seg.start->y, sx,sy},
-                        },
-                        {0,1,2, 2,3,0}});
-                }
-#pragma GCC diagnostic pop
-            }
-            /* upper section */
-            if (side->sector->ceiling > opp->sector->ceiling)
-            {
-                int top = side->sector->ceiling;
-                int bot = opp->sector->ceiling;
-
-                std::string texname = tolowercase(side->upper);
-                if (texname != "-")
-                {
-                    auto &tex = g.textures[texname];
-                    out.walls.back().uppertex = tex.get();
-
-                    double const tw = tex->width,
-                                 th = tex->height;
-
-                    double len =\
-                        sqrt(
-                            pow(seg.end->x - seg.start->x, 2)
-                            + pow(seg.end->y - seg.start->y, 2))
-                        / tw;
-                    double hgt = abs(top - bot) / th;
-
-                    bool unpegged = ld.flags & UNPEGGEDUPPER;
-                    double sx = (seg.offset + side->x) / tw,
-                           sy = (side->y / th) + (unpegged? 0 : -hgt);
-                    double ex = sx + len,
-                           ey = sy + hgt;
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wnarrowing"
-                    out.walls.back().uppermesh.reset(new Mesh{
-                        {
-                            {-seg.start->x,bot,seg.start->y, sx,ey},
-                            {-seg.end->x  ,bot,seg.end->y  , ex,ey},
-                            {-seg.end->x  ,top,seg.end->y  , ex,sy},
-                            {-seg.start->x,top,seg.start->y, sx,sy},
-                        },
-                        {0,1,2, 2,3,0}});
-                }
-#pragma GCC diagnostic pop
-            }
-        }
-    }
-
-    /* create the automap lines */
-    for (auto &ld : lvl.linedefs)
-    {
-        out.automap.emplace_back(
-            new Mesh{
-                {(GLfloat)-ld.start->x,(GLfloat)ld.start->y,0, 0,0},
-                {(GLfloat)-ld.end->x  ,(GLfloat)ld.end->y  ,0, 0,0}});
-    }
-
-    return out;
-}
-
+/* true iff (x,y) is on the right side of n's partition line */
 bool _check_node_side(int16_t x, int16_t y, Node const &n)
 {
-    double part_angle = atan2((double)n.dy, (double)n.dx);
-    double xy_angle = atan2(
-        (double)y - (double)n.y,
-        (double)x - (double)n.x);
+    /* check the left/right bounding boxes
+     * to see if we can decide quickly */
+    bool right =\
+        (  n.right_lower_x <= x && x <= n.right_upper_x
+        && n.right_lower_y <= y && y <= n.right_upper_y);
+    bool left =\
+        (  n.left_lower_x <= x && x <= n.left_upper_x
+        && n.left_lower_y <= y && y <= n.left_upper_y);
 
-    bool right = false;
-    if (copysign(1, part_angle) != copysign(1, xy_angle))
+    /* if the point is inside both boxes, or neither,
+     * do the expensive calculation */
+    if ((left && right) || (!left && !right))
     {
-        part_angle = atan2(-(double)n.dy, -(double)n.dx);
-        right = (xy_angle > part_angle);
-    }
-    else
-    {
-        right = (xy_angle < part_angle);
+        double part_angle = atan2((double)n.dy, (double)n.dx);
+        double xy_angle = atan2(
+            (double)y - (double)n.y,
+            (double)x - (double)n.x);
+
+        if (copysign(1, part_angle) != copysign(1, xy_angle))
+        {
+            part_angle = atan2(-(double)n.dy, -(double)n.dx);
+            right = (xy_angle > part_angle);
+        }
+        else
+        {
+            right = (xy_angle < part_angle);
+        }
     }
     return right;
 }
@@ -1969,11 +1783,301 @@ uint16_t get_ssector(int16_t x, int16_t y, Level const &lvl)
 
 
 
+void handle_event_TitleScreen(GameState &gs, SDL_Event e)
+{
+    if (gs.menu_open)
+    {
+        switch (e.type)
+        {
+        case SDL_MOUSEBUTTONDOWN:
+            gs.transition(State::InLevel, false);
+            break;
+        case SDL_KEYUP:
+            switch (e.key.keysym.sym)
+            {
+            case SDLK_RETURN:
+                gs.transition(State::InLevel, false);
+                break;
+            }
+            break;
+        }
+    }
+    else
+    {
+        switch (e.type)
+        {
+        case SDL_MOUSEBUTTONDOWN:
+            gs.transition(true);
+            break;
+        }
+    }
+}
+
+void handle_event_InLevel(GameState &gs, SDL_Event e)
+{
+    if (gs.menu_open)
+    {
+        switch (e.type)
+        {
+        case SDL_MOUSEBUTTONDOWN:
+            gs.transition(State::Exit);
+            break;
+        case SDL_KEYUP:
+            switch (e.key.keysym.sym)
+            {
+            case SDLK_RETURN:
+                gs.transition(State::Exit);
+                break;
+            }
+            break;
+        }
+    }
+    else
+    {
+        switch (e.type)
+        {
+        case SDL_USEREVENT:
+            switch (e.user.code)
+            {
+            case 0:
+                gs.update_animation = true;
+                break;
+            }
+            break;
+
+        case SDL_MOUSEMOTION:
+            gs.rndr.cam.rotate(
+                -e.motion.xrel / 10.0,
+                -e.motion.yrel / 10.0);
+            break;
+
+        case SDL_MOUSEBUTTONDOWN:
+            switch (gs.doomguy.weapon)
+            {
+            case Weapon::Fist:
+            case Weapon::Chainsaw:
+                break;
+            case Weapon::Pistol:
+            case Weapon::Chaingun:
+                if (gs.doomguy.bullets > 0)
+                {
+                    gs.doomguy.bullets -= 1;
+                }
+                break;
+            case Weapon::SuperShotgun:
+            case Weapon::Shotgun:
+                if (gs.doomguy.shells > 0)
+                {
+                    gs.doomguy.shells -= 1;
+                }
+                break;
+            case Weapon::RocketLauncher:
+                if (gs.doomguy.rockets > 0)
+                {
+                    gs.doomguy.rockets -= 1;
+                }
+                break;
+            case Weapon::PlasmaRifle:
+            case Weapon::BFG9000:
+                if (gs.doomguy.cells > 0)
+                {
+                    gs.doomguy.cells -= 1;
+                }
+                break;
+            }
+            break;
+
+        case SDL_MOUSEWHEEL:
+            if (gs.doom2)
+            {
+                if (gs.doomguy.weapon == Weapon::SuperShotgun)
+                {
+                    if (e.wheel.y < 0)
+                    {
+                        gs.doomguy.weapon = Weapon::Chaingun;
+                    }
+                    else if (e.wheel.y > 0)
+                    {
+                        gs.doomguy.weapon = Weapon::Shotgun;
+                    }
+                    break;
+                }
+                else
+                {
+                    if (   e.wheel.y < 0
+                        && gs.doomguy.weapon == Weapon::Shotgun)
+                    {
+                        gs.doomguy.weapon = Weapon::SuperShotgun;
+                        break;
+                    }
+                    else if (e.wheel.y > 0
+                        && gs.doomguy.weapon == Weapon::Chaingun)
+                    {
+                        gs.doomguy.weapon = Weapon::SuperShotgun;
+                        break;
+                    }
+                }
+            }
+            gs.doomguy.weapon -= e.wheel.y;
+            gs.doomguy.weapon %= 8;
+            break;
+
+        case SDL_KEYDOWN:
+            switch (e.key.keysym.sym)
+            {
+            case SDLK_LEFT:
+                gs.ctrl.turn = 1;
+                break;
+            case SDLK_RIGHT:
+                gs.ctrl.turn = -1;
+                break;
+            case SDLK_d:
+                gs.ctrl.right = 1.0;
+                break;
+            case SDLK_a:
+                gs.ctrl.left = 1.0;
+                break;
+            case SDLK_w:
+                gs.ctrl.forward = 1.0;
+                break;
+            case SDLK_s:
+                gs.ctrl.backward = 1.0;
+                break;
+            case SDLK_1:
+                if (gs.doomguy.weapon == Weapon::Chainsaw)
+                {
+                    gs.doomguy.weapon = Weapon::Fist;
+                }
+                else
+                {
+                    gs.doomguy.weapon = Weapon::Chainsaw;
+                }
+                break;
+            case SDLK_2:
+                gs.doomguy.weapon = Weapon::Pistol;
+                break;
+            case SDLK_3:
+                if (gs.doom2)
+                {
+                    if (gs.doomguy.weapon == Weapon::SuperShotgun)
+                    {
+                        gs.doomguy.weapon = Weapon::Shotgun;
+                    }
+                    else
+                    {
+                        gs.doomguy.weapon = Weapon::SuperShotgun;
+                    }
+                }
+                else
+                {
+                    gs.doomguy.weapon = Weapon::Shotgun;
+                }
+                break;
+            case SDLK_4:
+                gs.doomguy.weapon = Weapon::Chaingun;
+                break;
+            case SDLK_5:
+                gs.doomguy.weapon = Weapon::RocketLauncher;
+                break;
+            case SDLK_6:
+                gs.doomguy.weapon = Weapon::PlasmaRifle;
+                break;
+            case SDLK_7:
+                gs.doomguy.weapon = Weapon::BFG9000;
+                break;
+            case SDLK_TAB:
+                gs.automap_open = !gs.automap_open;
+                break;
+            }
+            break;
+
+        case SDL_KEYUP:
+            switch (e.key.keysym.sym)
+            {
+            case SDLK_LEFT:
+                gs.ctrl.turn = 0;
+                break;
+            case SDLK_RIGHT:
+                gs.ctrl.turn = 0;
+                break;
+            case SDLK_d:
+                gs.ctrl.right = 0;
+                break;
+            case SDLK_a:
+                gs.ctrl.left = 0;
+                break;
+            case SDLK_w:
+                gs.ctrl.forward = 0;
+                break;
+            case SDLK_s:
+                gs.ctrl.backward = 0;
+                break;
+
+            case SDLK_SPACE:
+                gs.setlevel(
+                    gs.level_idx
+                    + (gs.level_idx % 10 == 9)
+                    + 1);
+                break;
+            }
+            break;
+        }
+    }
+}
+
+
+
 void render_level(RenderLevel const &lvl, RenderGlobals const &g)
 {
+    /* draw the floors and ceilings */
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g.palette_texture);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, g.colormap_texture);
+    glActiveTexture(GL_TEXTURE1);
+
+    g.program->use();
+    g.program->set("camera", g.cam.matrix());
+    g.program->set("projection", g.projection);
+    g.program->set("palettes", 0);
+    g.program->set("palette", g.palette_number);
+    g.program->set("colormap", 2);
+    g.program->set("tex", 1);
+
+    for (auto &floor : lvl.floors)
+    {
+        g.program->set("colormap_idx",
+            (255 - floor.lightlevel) / 8);
+        if (floor.mesh != nullptr)
+        {
+            floor.tex->bind();
+            floor.mesh->bind();
+            glDrawElements(
+                GL_TRIANGLES,
+                floor.mesh->size(),
+                GL_UNSIGNED_INT,
+                0);
+        }
+    }
+    for (auto &ceiling : lvl.ceilings)
+    {
+        g.program->set("colormap_idx",
+            (255 - ceiling.lightlevel) / 8);
+        if (ceiling.mesh != nullptr)
+        {
+            ceiling.tex->bind();
+            ceiling.mesh->bind();
+            glDrawElements(
+                GL_TRIANGLES,
+                ceiling.mesh->size(),
+                GL_UNSIGNED_INT,
+                0);
+        }
+    }
+
+
     /* draw the walls */
     render_node(lvl.raw->nodes.size() - 1, lvl, g);
-
 
     /* draw the things */
     glActiveTexture(GL_TEXTURE0);
@@ -2059,11 +2163,7 @@ void render_node(
 {
     Node const &node = lvl.raw->nodes[index];
 
-    /* TODO: the node side check drops the framerate a bit,
-     *  it might be faster than always doing the right side first
-     *  if I precompute it each frame? */
-    //bool right = _check_node_side(g.cam.pos.x, g.cam.pos.z, node);
-    bool right = true;
+    bool right = !_check_node_side(-g.cam.pos.x, g.cam.pos.z, node);
     uint16_t first  = right? node.right : node.left;
     uint16_t second = right? node.left  : node.right;
 
@@ -2195,7 +2295,11 @@ void render_hud(
 
     /* weapon sprite */
     /* TODO: animations */
-    std::string const sprname = hands[doomguy.weapon] + "GA0";
+    std::string sprname = hands[doomguy.weapon] + "GA0";
+    if (doomguy.weapon == Weapon::SuperShotgun)
+    {
+        sprname = hands[doomguy.weapon] + "2A0";
+    }
     auto &img = g.sprites[sprname];
     auto &spr = wad.sprites[sprname];
 
@@ -2314,47 +2418,14 @@ void render_automap(RenderLevel const &lvl, RenderGlobals const &g)
                 glm::vec3{0, 0, 1}),
             glm::vec3{-g.cam.pos.x, -g.cam.pos.z, 0}));
 
-    for (size_t i = 0; i < lvl.automap.size(); ++i)
-    {
-        auto &mesh = lvl.automap[i];
-        auto &ld = lvl.raw->linedefs[i];
+    lvl.automap->bind();
+    glDrawElements(
+        GL_LINES,
+        lvl.automap->size(),
+        GL_UNSIGNED_INT,
+        0);
 
-        glm::vec4 color{0.0, 1.0, 0.0, 1.0};
-        if (ld.flags & TWOSIDED)
-        {
-            if (!(ld.flags & SECRET))
-            {
-                color.x = 0;
-                color.y = 0.5;
-                color.z = 0;
-            }
-            else
-            {
-                color.x = 1.0;
-                color.y = 1.0;
-                color.z = 0;
-            }
-        }
-        if (ld.flags & UNMAPPED)
-        {
-                color.w = 0.0;
-        }
-        if (ld.flags & PREMAPPED)
-        {
-                color.x = 0.0;
-                color.y = 1.0;
-                color.z = 1.0;
-        }
-        g.automap_program->set("color", color);
-
-        mesh->bind();
-        glDrawElements(
-            GL_LINES,
-            mesh->size(),
-            GL_UNSIGNED_INT,
-            0);
-    }
-
+    /* draw the automap cursor */
     g.automap_program->set("transform", glm::mat4{1});
     g.automap_program->set("color", glm::vec4{1.0, 0.0, 0.0, 1.0});
     automap_cursor->bind();

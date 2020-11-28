@@ -159,7 +159,7 @@ void patchWAD(WAD &wad, FILE *f)
 void readwad(WAD &wad)
 {
     /* load PNAMES */
-    DirEntry &dir = wad.findlump("PNAMES");
+    DirEntry dir = wad.findlump("PNAMES");
     dir.seek(0, SEEK_SET);
 
     uint32_t count = 0;
@@ -241,7 +241,7 @@ Level readlevel(std::string level, WAD &wad)
     auto const lvlidx = wad.lumpidx(level.c_str());
 
     /* read THINGS */
-    DirEntry &dir = wad.findlump("THINGS", lvlidx);
+    DirEntry dir = wad.findlump("THINGS", lvlidx);
     dir.seek(0, SEEK_SET);
 
     for (size_t i = 0; i < dir.size / 10; ++i)
@@ -431,7 +431,7 @@ std::vector<TextureDefinition> readtexturedefs(
     WAD &wad,
     char const lumpname[9])
 {
-    auto dir = wad.findlump(lumpname);
+    DirEntry dir = wad.findlump(lumpname);
     dir.seek(0, SEEK_SET);
 
     /* number of texturedefs in the lump */

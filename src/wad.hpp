@@ -185,7 +185,7 @@ struct Seg
 {
     Vertex *start, *end;
     /* 0000=east, 4000=north, 8000=west, C000=south
-     * see [4-6] for more details */
+     * (Binary Angle Measurement) */
     uint16_t angle;
     uint16_t linedef;
     /* 0 if the SEG goes the same, or 1 if in the
@@ -268,24 +268,6 @@ struct Picture
 
 
 
-struct Level
-{
-    class WAD /*const*/ *wad;
-
-    std::vector<Thing> things;
-    std::vector<Linedef> linedefs;
-    std::vector<Sidedef> sidedefs;
-    std::vector<Vertex> vertices;
-    std::vector<Seg> segs;
-    std::vector<SSector> ssectors;
-    std::vector<Node> nodes;
-    std::vector<Sector> sectors;
-    Reject reject;
-    BlockMap blockmap;
-};
-
-
-
 struct DirEntry
 {
 private:
@@ -322,6 +304,24 @@ public:
 
     /* get the lump itself */
     DirEntry &findlump(std::string name, size_t start=0);
+};
+
+
+
+struct Level
+{
+    class WAD /*const*/ *wad;
+
+    std::vector<Thing> things;
+    std::vector<Linedef> linedefs;
+    std::vector<Sidedef> sidedefs;
+    std::vector<Vertex> vertices;
+    std::vector<Seg> segs;
+    std::vector<SSector> ssectors;
+    std::vector<Node> nodes;
+    std::vector<Sector> sectors;
+    Reject reject;
+    BlockMap blockmap;
 };
 
 
